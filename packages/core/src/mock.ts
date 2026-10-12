@@ -103,44 +103,28 @@ export const mockProducts: Product[] = [
  * 风格管形体语言（偏肌肉还是偏脂肪），数字管实际维度。
  */
 export function defaultBodyProfile(gender: Gender = 'female'): BodyProfile {
+  // 具体围度取自 body-model.ts 的中性锚点（BMI 22.5），
+  // 两处必须一致 —— 否则「默认状态」与「中性档案」不符，
+  // 网格一开局就被变形（这个坑踩过一次）。
   if (gender === 'male') {
     return {
-      gender: 'male',
-      build: 'average',
-      heightCm: 176,
-      weightKg: 70,
-      chestCm: 96,
-      waistCm: 82,
-      hipCm: 95,
-      upperArmCircCm: 32,
-      thighCircCm: 56,
-      shoulderWidthCm: 45,
-      torsoLengthCm: 47,
-      neckLengthCm: 11,
-      // 肩到腕 ≈ 0.34 × 身高，这是真人比例
-      upperArmCm: 33,
-      forearmCm: 27,
-      thighCm: 47,
-      calfCm: 43,
+      gender: 'male', build: 'average',
+      heightCm: 170, weightKg: 65,
+      chestCm: 92, waistCm: 78, hipCm: 92,
+      upperArmCircCm: 29, forearmCircCm: 25,
+      thighCircCm: 54, calfCircCm: 36,
+      shoulderWidthCm: 43, torsoLengthCm: 45, neckLengthCm: 11,
+      upperArmCm: 31, forearmCm: 25, thighCm: 47, calfCm: 43,
     }
   }
   return {
-    gender: 'female',
-    build: 'average',
-    heightCm: 165,
-    weightKg: 54,
-    chestCm: 86,
-    waistCm: 67,
-    hipCm: 92,
-    upperArmCircCm: 26,
-    thighCircCm: 52,
-    shoulderWidthCm: 39,
-    torsoLengthCm: 43,
-    neckLengthCm: 9,
-    upperArmCm: 31,
-    forearmCm: 25,
-    thighCm: 43,
-    calfCm: 39,
+    gender: 'female', build: 'average',
+    heightCm: 158, weightKg: 56,
+    chestCm: 84, waistCm: 68, hipCm: 90,
+    upperArmCircCm: 26, forearmCircCm: 22,
+    thighCircCm: 52, calfCircCm: 34,
+    shoulderWidthCm: 37, torsoLengthCm: 41, neckLengthCm: 9,
+    upperArmCm: 29, forearmCm: 23, thighCm: 43, calfCm: 39,
   }
 }
 

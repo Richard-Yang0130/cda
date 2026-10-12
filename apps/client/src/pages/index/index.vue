@@ -262,13 +262,13 @@ interface MeasureField {
 
 /** 骨骼维度：与体脂无关，范围是固定的 */
 const FRAME_RANGES: Record<FrameKey, { min: number; max: number }> = {
-  shoulderWidthCm: { min: 32, max: 56 },
-  neckLengthCm: { min: 5, max: 18 },
-  torsoLengthCm: { min: 34, max: 62 },
-  upperArmCm: { min: 22, max: 42 },
-  forearmCm: { min: 18, max: 34 },
-  thighCm: { min: 34, max: 60 },
-  calfCm: { min: 28, max: 52 },
+  shoulderWidthCm: { min: 34, max: 52 },
+  neckLengthCm: { min: 6, max: 15 },
+  torsoLengthCm: { min: 36, max: 58 },
+  upperArmCm: { min: 24, max: 38 },
+  forearmCm: { min: 20, max: 32 },
+  thighCm: { min: 36, max: 56 },
+  calfCm: { min: 30, max: 48 },
 }
 
 const girthSet = new Set<string>(GIRTH_KEYS)
@@ -302,12 +302,14 @@ const stageFields: Record<StageId, MeasureField[]> = {
     { key: 'waistCm', label: '腰围', unit: 'cm' },
     { key: 'torsoLengthCm', label: '上身长', unit: 'cm' },
     { key: 'upperArmCircCm', label: '大臂围', unit: 'cm' },
+    { key: 'forearmCircCm', label: '小臂围', unit: 'cm' },
     { key: 'upperArmCm', label: '大臂长', unit: 'cm' },
     { key: 'forearmCm', label: '小臂长', unit: 'cm' },
   ],
   lower: [
     { key: 'hipCm', label: '臀围', unit: 'cm' },
     { key: 'thighCircCm', label: '大腿围', unit: 'cm' },
+    { key: 'calfCircCm', label: '小腿围', unit: 'cm' },
     { key: 'thighCm', label: '大腿长', unit: 'cm' },
     { key: 'calfCm', label: '小腿长', unit: 'cm' },
   ],
@@ -323,8 +325,16 @@ function fieldValue(key: FieldKey): number {
 
 /** 取某项的可拖范围。围度与体重的范围是**派生**的，不是写死的 */
 function fieldRange(key: FieldKey): { min: number; max: number } {
-  if (key === 'heightCm') return { min: 145, max: 205 }
-  if (key === 'weightKg') return rangeOf(state, 'weightKg')
+  if (key === 'heightCm') {
+    // 按性别收窄到真实区间（极端体型看起来异常，且不是主流场景）
+    return state.gender === 'male' ? { min: 165, max: 195 } : { min: 155, max: 180 }
+  }
+  if (key === 'weightKg') {
+    // BMI 导出的范围 ∩ 绝对值范围，两者都要满足
+    const w = rangeOf(state, 'weightKg')
+    const abs = state.gender === 'male' ? { min: 55, max: 100 } : { min: 40, max: 90 }
+    return { min: Math.max(w.min, abs.min), max: Math.min(w.max, abs.max) }
+  }
   if (girthSet.has(key)) return rangeOf(state, key as GirthKey)
   return FRAME_RANGES[key as FrameKey]
 }

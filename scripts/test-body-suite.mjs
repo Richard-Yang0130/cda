@@ -11,16 +11,16 @@ import puppeteer from 'puppeteer-core'
 import { mkdirSync, writeFileSync } from 'node:fs'
 
 const CASES = [
-  ['女 155/45 娇小偏瘦', 'g=female&m=height:155,weight:45'],
-  ['女 165/54 标准',     'g=female'],
-  ['女 165/68 微胖',     'g=female&m=weight:68'],
-  ['女 165/85 丰满',     'g=female&m=weight:85'],
-  ['女 175/62 高挑',     'g=female&m=height:175,weight:62'],
-  ['男 170/58 偏瘦',     'g=male&m=height:170,weight:58'],
-  ['男 176/70 标准',     'g=male'],
-  ['男 176/85 健壮',     'g=male&m=weight:85'],
-  ['男 176/98 偏胖',     'g=male&m=weight:98'],
-  ['男 185/80 高个',     'g=male&m=height:185,weight:80'],
+  ['女 155/42 偏瘦',  'g=female&m=height:155,weight:42'],
+  ['女 158/56 标准',  'g=female'],
+  ['女 165/70 微胖',  'g=female&m=height:165,weight:70'],
+  ['女 170/85 丰满',  'g=female&m=height:170,weight:85'],
+  ['女 180/70 高挑',  'g=female&m=height:180,weight:70'],
+  ['男 165/58 偏瘦',  'g=male&m=height:165,weight:58'],
+  ['男 170/65 标准',  'g=male'],
+  ['男 178/82 偏壮',  'g=male&m=height:178,weight:82'],
+  ['男 185/95 偏胖',  'g=male&m=height:185,weight:95'],
+  ['男 195/88 高个',  'g=male&m=height:195,weight:88'],
 ]
 
 const OUT = '/tmp/bodysuite'

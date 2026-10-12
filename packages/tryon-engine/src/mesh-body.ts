@@ -352,18 +352,40 @@ export class MeshBody implements BodySurface {
 
         const gThigh = ratio(profile.thighCircCm, neutral.thighCircCm)
     const gArm = ratio(profile.upperArmCircCm, neutral.upperArmCircCm)
+    const gForearm = ratio(profile.forearmCircCm, neutral.forearmCircCm)
+    const gCalf = ratio(profile.calfCircCm, neutral.calfCircCm)
     const gAtShoulder = torsoGainAtY(LEVELS.shoulder - 0.02)
     const gAtHip = torsoGainAtY(LEVELS.crotch)
 
     const gainOf = (name: string, t: number): number => {
       if (name === 'head') return 1
+      /*
+       * 四肢增益**沿长度变化**，不再全段一个常数。
+       *
+       * 这是联动逻辑的关键一环：一条肢体的粗细本来就不均匀 ——
+       * 大腿最粗、膝以下由小腿围决定；大臂最粗、肘以下由小臂围决定。
+       * 用单个常数会把小腿按大腿缩放、小臂按大臂缩放，比例必然错。
+       *
+       * 控制点位置按解剖比例：膝约在 t=0.5（大腿长≈小腿长）、
+       * 小腿最粗处 t≈0.72；肘约在 t=0.5、前臂最粗处 t≈0.72。
+       */
       if (name.startsWith('leg')) {
-        const k = Math.min(1, t / 0.18)
-        return gAtHip + (gThigh - gAtHip) * k
+        return smoothSeg(t, [
+          [0, gAtHip],
+          [0.3, gThigh],
+          [0.55, gThigh],
+          [0.72, gCalf],
+          [1, gCalf],
+        ])
       }
       if (name.startsWith('arm')) {
-        const k = Math.min(1, t / 0.16)
-        return gAtShoulder + (gArm - gAtShoulder) * k
+        return smoothSeg(t, [
+          [0, gAtShoulder],
+          [0.28, gArm],
+          [0.5, gArm],
+          [0.72, gForearm],
+          [1, gForearm],
+        ])
       }
       return torsoGainAtY(LEVELS.crotch + t * (LEVELS.shoulder + 0.03 - LEVELS.crotch))
     }

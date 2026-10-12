@@ -145,8 +145,12 @@ export interface BodyProfile {
   hipCm: number
   /** 大臂围（放松状态） */
   upperArmCircCm: number
+  /** 小臂围（前臂最粗处） */
+  forearmCircCm: number
   /** 大腿围（根部最粗处） */
   thighCircCm: number
+  /** 小腿围（腓肠肌最粗处） */
+  calfCircCm: number
 
   // ── 长度与宽度 ──
   /** 肩宽：左右肩峰之间的距离 */

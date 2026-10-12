@@ -20,13 +20,29 @@ import type { BodyBuildId, BodyProfile, Gender } from './types'
 // 生理约束（WHO 公开界值）
 // ────────────────────────────────────────────────────────────
 
-/** 建模允许的 BMI 区间。低于 16 或高于 40 在现实中已属极端，模型强行外推会失真 */
-export const BMI_RANGE = { min: 16, max: 40 } as const
-/** 健康 BMI 区间（WHO） */
-export const BMI_HEALTHY = { min: 18.5, max: 24.9 } as const
+/**
+ * 建模允许的 BMI 区间。
+ *
+ * ⚠️ 用户明确要求**把可拖动范围收窄到真实区间**（极端体型看起来异常，
+ * 而且那不是主流场景，不值得为它做优化）。所以这里从原来的 16–40
+ * 收窄到 17–32 —— 覆盖偏瘦到肥胖，但不进入病态极端。
+ *
+ * 说明：网络来源受限（百度百科 403），我未能取到 GB/T 10000 标准原文，
+ * 因此下列数值中：
+ *   - BMI 分级与腰围界值属**公开且广为人知的中国标准**，可直接采用
+ *   - 各围度锚点属**参考值标定**，不是标准原文，需要时可整表调整
+ */
+export const BMI_RANGE = { min: 17, max: 32 } as const
+/** 健康 BMI 区间（**中国标准**，比 WHO 更严：超重 24、肥胖 28） */
+export const BMI_HEALTHY = { min: 18.5, max: 23.9 } as const
 /** 腰高比健康界值：≥0.5 即提示中心性肥胖风险 */
 export const WHTR_HEALTHY = 0.5
-/** 腰臀比腹型肥胖界值（WHO）：男 >0.90，女 >0.85 */
+/**
+ * 中心性肥胖的**腰围**界值（中国肥胖问题工作组）：
+ * 男性 ≥90cm、女性 ≥85cm。比 WHO 的腰臀比界值更常用于中国人群。
+ */
+export const WAIST_LIMIT = { male: 90, female: 85 } as const
+/** 腰臀比腹型肥胖界值：男 >0.90，女 >0.85 */
 export const WHR_LIMIT = { male: 0.9, female: 0.85 } as const
 
 // ────────────────────────────────────────────────────────────
@@ -53,37 +69,51 @@ interface Anchor {
   hip: number
   thigh: number
   arm: number
+  /** 小臂围 */
+  forearm: number
+  /** 小腿围 */
+  calf: number
 }
 
-/** 基准身高下的女性锚点（165cm） */
+/** 基准身高下的女性锚点（158cm，中国成年女性均值附近） */
 const FEMALE_ANCHORS: Anchor[] = [
-  { f: 0.0, bmi: 18.5, chest: 80, waist: 62, hip: 87, thigh: 50, arm: 25 },
-  { f: 0.35, bmi: 24.3, chest: 88, waist: 71, hip: 94, thigh: 56, arm: 29 },
-  { f: 0.7, bmi: 30.1, chest: 97, waist: 84, hip: 103, thigh: 62, arm: 33 },
-  { f: 1.0, bmi: 35.0, chest: 104, waist: 95, hip: 110, thigh: 67, arm: 36 },
+  { f: 0.0, bmi: 17.0, chest: 76, waist: 58, hip: 84, thigh: 46, arm: 23, forearm: 20, calf: 30 },
+  { f: 0.35, bmi: 22.5, chest: 84, waist: 68, hip: 90, thigh: 52, arm: 26, forearm: 22, calf: 34 },
+  { f: 0.7, bmi: 27.0, chest: 92, waist: 79, hip: 97, thigh: 57, arm: 29, forearm: 24, calf: 37 },
+  { f: 1.0, bmi: 32.0, chest: 100, waist: 92, hip: 104, thigh: 62, arm: 32, forearm: 26, calf: 40 },
 ]
 
-/** 基准身高下的男性锚点（176cm） */
+/** 基准身高下的男性锚点（170cm，中国成年男性均值附近） */
 const MALE_ANCHORS: Anchor[] = [
-  { f: 0.0, bmi: 18.5, chest: 88, waist: 72, hip: 88, thigh: 52, arm: 28 },
-  { f: 0.35, bmi: 24.3, chest: 98, waist: 84, hip: 95, thigh: 58, arm: 32 },
-  { f: 0.7, bmi: 30.1, chest: 108, waist: 97, hip: 102, thigh: 63, arm: 36 },
-  { f: 1.0, bmi: 35.0, chest: 115, waist: 108, hip: 108, thigh: 68, arm: 40 },
+  { f: 0.0, bmi: 17.0, chest: 84, waist: 68, hip: 84, thigh: 48, arm: 25, forearm: 22, calf: 32 },
+  { f: 0.35, bmi: 22.5, chest: 92, waist: 78, hip: 92, thigh: 54, arm: 29, forearm: 25, calf: 36 },
+  { f: 0.7, bmi: 27.0, chest: 100, waist: 90, hip: 99, thigh: 59, arm: 33, forearm: 28, calf: 39 },
+  { f: 1.0, bmi: 32.0, chest: 108, waist: 102, hip: 105, thigh: 64, arm: 36, forearm: 30, calf: 42 },
 ]
 
-const REF_HEIGHT = { female: 165, male: 176 } as const
+/** 基准身高改为中国成年人均值附近，围度按此缩放 */
+const REF_HEIGHT = { female: 158, male: 170 } as const
 
 /** 受体脂影响的围度（这些会一起联动） */
-export type GirthKey = 'chestCm' | 'waistCm' | 'hipCm' | 'thighCircCm' | 'upperArmCircCm'
+export type GirthKey =
+  | 'chestCm' | 'waistCm' | 'hipCm'
+  | 'thighCircCm' | 'calfCircCm'
+  | 'upperArmCircCm' | 'forearmCircCm'
 
-export const GIRTH_KEYS: GirthKey[] = ['chestCm', 'waistCm', 'hipCm', 'thighCircCm', 'upperArmCircCm']
+export const GIRTH_KEYS: GirthKey[] = [
+  'chestCm', 'waistCm', 'hipCm',
+  'thighCircCm', 'calfCircCm',
+  'upperArmCircCm', 'forearmCircCm',
+]
 
 const ANCHOR_FIELD: Record<GirthKey, keyof Anchor> = {
   chestCm: 'chest',
   waistCm: 'waist',
   hipCm: 'hip',
   thighCircCm: 'thigh',
+  calfCircCm: 'calf',
   upperArmCircCm: 'arm',
+  forearmCircCm: 'forearm',
 }
 
 function anchorsFor(gender: Gender): Anchor[] {
@@ -231,7 +261,9 @@ export function deriveProfile(state: BodyState): BodyProfile {
     waistCm: girthAt(state, 'waistCm'),
     hipCm: girthAt(state, 'hipCm'),
     upperArmCircCm: girthAt(state, 'upperArmCircCm'),
+    forearmCircCm: girthAt(state, 'forearmCircCm'),
     thighCircCm: girthAt(state, 'thighCircCm'),
+    calfCircCm: girthAt(state, 'calfCircCm'),
     shoulderWidthCm: state.frame.shoulderWidthCm,
     torsoLengthCm: state.frame.torsoLengthCm,
     neckLengthCm: state.frame.neckLengthCm,
@@ -274,8 +306,16 @@ export function setFrame(state: BodyState, key: FrameKey, valueCm: number): Body
 /** 换性别 / 形体风格 */
 export function setGender(state: BodyState, gender: Gender): BodyState {
   if (state.gender === gender) return state
-  // 保留体脂水平与身高，骨骼维度按新性别的比例重建
-  return { ...state, gender, frame: defaultFrame(gender, state.heightCm) }
+  /*
+   * ⚠️ 身高必须一起换成新性别的典型值。
+   *
+   * 曾经只改 gender 而保留原来的 heightCm —— 应用默认是女性 158cm，
+   * 切到男性后仍是 158cm，于是所有围度按 158/170 缩放，
+   * 男性胸围算出 86（应为 92）。默认值本来就是性别相关的，
+   * 切换性别就该采用该性别的典型身高。
+   */
+  const h = REF_HEIGHT[gender]
+  return { ...state, gender, heightCm: h, frame: defaultFrame(gender, h) }
 }
 
 // ────────────────────────────────────────────────────────────
