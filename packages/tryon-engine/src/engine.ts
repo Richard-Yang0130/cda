@@ -207,9 +207,26 @@ export class TryonEngine {
    * 服装仍会重算（否则衣服会在拖动时脱离身体），但整体开销可控。
    */
   setBodyProfile(profile: BodyProfile, quality: MannequinQuality = 'final'): void {
+    const t0 = Date.now()
     this.model = createBodyModel(profile)
+    const tModel = Date.now() - t0
     this.rebuildMannequin(quality)
     this.frameBody()
+
+    /*
+     * ⚠️ 雕刻网格激活时**不重建服装**。
+     *
+     * three.js 的 Raycaster 是逐三角形测试，网格有 26576 个三角形，
+     * 一件衣服几百条射线 → 单件就要千万次三角形测试，
+     * 重建全部服装需要数秒，拖动滑杆会彻底卡死。
+     * 服装迁移尚未完成（贴合不合格），先跳过；见 docs/待办.md P0。
+     */
+    if (this.meshBody) {
+      const dt = Date.now() - t0
+      if (dt > 120) console.log(`[CDA-PERF] 改体型(网格) ${dt}ms (其中 SDF 模型 ${tModel}ms)`)
+      this.dirty = true
+      return
+    }
 
     // 服装几何依赖身体截面，身型变了必须重建
     const entries = [...this.garments.entries()]
@@ -224,6 +241,8 @@ export class TryonEngine {
         next.setFastenerClosed(closed)
       }
     }
+    const dt = Date.now() - t0
+    if (dt > 120) console.log(`[CDA-PERF] 改体型(SDF) ${dt}ms`)
     this.dirty = true
   }
 
@@ -238,8 +257,12 @@ export class TryonEngine {
    * 见 mesh-body.ts 的算法说明。
    */
   async useMeshBody(url: string): Promise<void> {
+    // ⚠️ 档案必须在 await **之后**再读。
+    // 曾经在函数开头就读进局部变量，而下载 OBJ 要几百毫秒到数秒，
+    // 期间用户改的体型全部丢失 —— 表现就是「拖滑杆网格纹丝不动」。
+    const gender = this.model.profile.gender
+    const mb = await MeshBody.loadFromUrl(url, this.model.profile, gender)
     const profile = this.model.profile
-    const mb = await MeshBody.loadFromUrl(url, profile, profile.gender)
     if (this.meshBody) {
       this.world.remove(this.meshBody.object3D)
       this.meshBody.dispose()

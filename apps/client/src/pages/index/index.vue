@@ -411,10 +411,52 @@ function initEngine() {
   stage.onResize((w, h) => engine?.resize(w, h))
   engine.start()
   stageHint.value = '按住可旋转人偶'
-  // SDF 人体已下线，雕刻网格是唯一的身体，创建后立即加载
+  // 先应用 URL 里的体型参数，再加载网格 ——
+  // 顺序反了的话，网格下载期间就用了旧档案（见 useMeshBody 的注释）
+  applyBodyFromQuery()
   void loadMesh()
   applyPoseFromQuery()
   applyPendingOutfit()
+}
+
+/**
+ * 调试 / 截图用体型预设：`?m=height:178,waist:95,hip:105`
+ *
+ * 用于精确复现某个体型，不必手动拖滑杆（拖滑杆无法自动化验证）。
+ * 走的是与滑杆**完全相同**的耦合路径，所以验证结果对真实操作有效。
+ */
+function applyBodyFromQuery() {
+  // #ifdef H5
+  if (typeof window === 'undefined') return
+  const spec = new URLSearchParams(window.location.search).get('m')
+  if (!spec) return
+  const map: Record<string, 'height' | 'weight' | 'girth' | 'frame'> = {
+    height: 'height', weight: 'weight',
+    chest: 'girth', waist: 'girth', hip: 'girth', thigh: 'girth', arm: 'girth',
+    shoulder: 'frame', torso: 'frame', neck: 'frame', upperArm: 'frame',
+    forearm: 'frame', thighLen: 'frame', calf: 'frame',
+  }
+  const keyOf: Record<string, string> = {
+    height: 'heightCm', weight: 'weightKg',
+    chest: 'chestCm', waist: 'waistCm', hip: 'hipCm', thigh: 'thighCircCm', arm: 'upperArmCircCm',
+    shoulder: 'shoulderWidthCm', torso: 'torsoLengthCm', neck: 'neckLengthCm',
+    upperArm: 'upperArmCm', forearm: 'forearmCm', thighLen: 'thighCm', calf: 'calfCm',
+  }
+  for (const part of spec.split(',')) {
+    const [rawK, rawV] = part.split(':')
+    const kind = map[rawK ?? '']
+    const v = Number(rawV)
+    if (!kind || !Number.isFinite(v)) continue
+    let next: BodyState = state
+    if (kind === 'height') next = setHeight(state, v)
+    else if (kind === 'weight') next = setWeight(state, v)
+    else if (kind === 'girth') next = setGirth(state, keyOf[rawK!] as GirthKey, v)
+    else next = setFrame(state, keyOf[rawK!] as FrameKey, v)
+    Object.assign(state, next)
+  }
+  Object.assign(store.body, currentProfile())
+  engine?.setBodyProfile(currentProfile(), 'final')
+  // #endif
 }
 
 /**
