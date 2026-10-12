@@ -74,6 +74,10 @@ export function createH5Platform(): TryonPlatform {
         alpha: opts?.alpha ?? true,
         preserveDrawingBuffer: true,
       })
+      // 电影级色调映射：白色人台在棚灯下很容易过曝成一片死白，
+      // ACES 能压住高光、保住形体层次
+      renderer.toneMapping = THREE.ACESFilmicToneMapping
+      renderer.toneMappingExposure = 1.05
       return renderer as unknown as RendererLike
     },
 

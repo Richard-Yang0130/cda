@@ -114,19 +114,24 @@ export class TryonEngine {
   // ------------------------------------------------------------ 初始化
 
   private setupLights(): void {
-    const hemi = new THREE.HemisphereLight(0xffffff, 0x9a9a9a, 1.15)
+    // 环境光压低：白模靠明暗塑形，环境光过强会一片死白、失去体积感
+    const hemi = new THREE.HemisphereLight(0xffffff, 0xb9b2a8, 0.55)
     this.scene.add(hemi)
 
-    const key = new THREE.DirectionalLight(0xffffff, 1.5)
-    key.position.set(1.6, 3.2, 2.4)
+    // 主光：左上前方
+    const key = new THREE.DirectionalLight(0xffffff, 2.1)
+    key.position.set(1.8, 3.4, 2.6)
     this.scene.add(key)
 
-    const fill = new THREE.DirectionalLight(0xffffff, 0.55)
-    fill.position.set(-2.2, 1.6, -1.2)
+    // 辅光：右侧补暗部，避免死黑
+    const fill = new THREE.DirectionalLight(0xffffff, 0.6)
+    fill.position.set(-2.4, 1.4, 1.4)
     this.scene.add(fill)
 
-    const rim = new THREE.DirectionalLight(0xffffff, 0.35)
-    rim.position.set(0, 1.2, -3)
+    // 轮廓光：从背后打，勾出白色人台与背景的分界。
+    // 白模最不能缺的就是这一盏 —— 没有它，白色形体边缘会溶进背景
+    const rim = new THREE.DirectionalLight(0xffffff, 1.5)
+    rim.position.set(-0.8, 1.8, -3.2)
     this.scene.add(rim)
   }
 

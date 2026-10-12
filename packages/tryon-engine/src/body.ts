@@ -94,7 +94,7 @@ export function buildArmSpecs(p: BodyProfile): LimbSpec[] {
   const H = p.heightCm
   const bust = p.bustCm ?? p.weightKg * 1.55
   const shoulder = p.shoulderCm ?? bust * 0.42
-  const radiusTop = (bust * 0.049) * scale
+  const radiusTop = (bust * 0.052) * scale
 
   return ([-1, 1] as const).map((side) => ({
     side,
@@ -103,10 +103,12 @@ export function buildArmSpecs(p: BodyProfile): LimbSpec[] {
       y: BODY_LANDMARKS.shoulder * H * scale,
       z: 0,
     },
-    rotationZ: side * 0.14,
-    length: (BODY_LANDMARKS.shoulder - 0.36) * H * scale,
+    rotationZ: side * 0.13,
+    // 手腕应落在胯部附近（约 0.47H）。原先算到 0.36H，手臂长过胯，
+    // 视觉上像猿臂 —— 这也是袖子看起来拖沓的根因。
+    length: (BODY_LANDMARKS.shoulder - 0.47) * H * scale,
     radiusTop,
-    radiusBottom: radiusTop * 0.72,
+    radiusBottom: radiusTop * 0.66,
   }))
 }
 
@@ -114,7 +116,7 @@ export function buildLegSpecs(p: BodyProfile): LimbSpec[] {
   const scale = 0.01
   const H = p.heightCm
   const hipR = radiusFromCircumference(p.hipCm ?? p.weightKg * 1.62)
-  const radiusTop = hipR * 0.38 * scale
+  const radiusTop = hipR * 0.43 * scale
 
   return ([-1, 1] as const).map((side) => ({
     side,
@@ -126,7 +128,8 @@ export function buildLegSpecs(p: BodyProfile): LimbSpec[] {
     rotationZ: side * -0.02,
     length: (BODY_LANDMARKS.hip - BODY_LANDMARKS.ankle) * H * scale,
     radiusTop,
-    radiusBottom: radiusTop * 0.42,
+    // 踝部太细会让人台显得发飘，5cm 左右比较稳
+    radiusBottom: radiusTop * 0.5,
   }))
 }
 
@@ -143,6 +146,11 @@ export function buildTrunkRings(p: BodyProfile): BodyRing[] {
   const L = BODY_LANDMARKS
 
   return [
+    // 骨盆到底裆要「渐进收窄」，不能一步台阶下到底：
+    // 原来只有一环（0.45 -> 0.405 且半径陡降），白色材质下会露出一块方形台阶。
+    // 现在分三环收，末端很窄，正好藏在两条大腿之间。
+    { t: L.crotch - 0.085, rx: radiusFromCircumference(hip) * 0.42, rz: radiusFromCircumference(hip) * 0.34 },
+    { t: L.crotch - 0.035, rx: radiusFromCircumference(hip) * 0.78, rz: radiusFromCircumference(hip) * 0.62 },
     { t: L.crotch, rx: radiusFromCircumference(hip) * 1.0, rz: radiusFromCircumference(hip) * 0.78 },
     { t: L.hip, rx: radiusFromCircumference(hip), rz: radiusFromCircumference(hip) * 0.76 },
     { t: (L.hip + L.waist) / 2, rx: radiusFromCircumference((hip + waist) / 2) * 0.96, rz: radiusFromCircumference(waist) * 0.79 },
@@ -253,18 +261,69 @@ export function loftGeometry(
   return geometry
 }
 
-/** 人偶材质：柔和的哑光肤色。刻意比白色衣服暗一档，让浅色单品有对比 */
-function mannequinMaterial(): THREE.MeshStandardMaterial {
-  return new THREE.MeshStandardMaterial({
-    color: 0xd8cec4,
-    roughness: 0.6,
-    metalness: 0.0,
+/**
+ * 人台材质：白色哑光树脂（白模）。
+ *
+ * 为什么从拟真肤色改为白模：
+ *   程序化几何做不出可信的人体细节（五官、肌肉、皮肤质感），
+ *   而「肤色 + 无五官」会正好落进恐怖谷 —— 观众本能地拿它跟真人比，
+ *   然后觉得丑且诡异。
+ *   白模是展示业界的既定语言：服装店里的人台本来就不像人。
+ *   它主动放弃拟真，因此不会被拿来跟真人比较，丑的问题从根上消失。
+ *
+ * clearcoat 给一点树脂光泽，让白色形体在棚灯下有层次，不至于死白一片。
+ */
+function mannequinMaterial(): THREE.MeshPhysicalMaterial {
+  return new THREE.MeshPhysicalMaterial({
+    // 略偏灰而非纯白：纯白会和白衬衫（0xf2f2f0）糊成一片。
+    // 真正区分两者的是质感 —— 人台是亮面树脂，衣服是哑光布料。
+    color: 0xece8e3,
+    roughness: 0.34,
+    metalness: 0,
+    clearcoat: 0.4,
+    clearcoatRoughness: 0.4,
   })
 }
 
 /**
- * 生成完整人偶。
- * 躯干由身型驱动；四肢与头部为风格化常量（后续可同样参数化）。
+ * 头颈一体成型（LatheGeometry 旋转体）。
+ *
+ * 原来用「球 + 圆柱」拼，接缝在白色材质下会非常明显。
+ * 旋转体可以画出一条连续、优雅的侧面轮廓 —— 这是人台最该做好的地方。
+ */
+function buildHeadAndNeck(profile: BodyProfile, mat: THREE.Material): THREE.Mesh {
+  const unit = profile.heightCm * 0.01
+  const k = unit / 1.68 // 以 1.68m 的人台为基准等比缩放
+  // 剖面点：[半径(米), 相对颈根的高度(米)]
+  const section: Array<[number, number]> = [
+    [0.0, 0.0],
+    [0.052, 0.0],
+    [0.049, 0.018],
+    [0.044, 0.04], // 颈部最细
+    [0.048, 0.058],
+    [0.061, 0.074], // 下颌
+    [0.072, 0.098],
+    [0.078, 0.13], // 最宽
+    [0.074, 0.164],
+    [0.06, 0.198],
+    [0.035, 0.222],
+    [0.0, 0.232], // 头顶
+  ]
+  const points = section.map(([r, y]) => new THREE.Vector2(r * k, y * k))
+  const geometry = new THREE.LatheGeometry(points, 44)
+  geometry.translate(0, BODY_LANDMARKS.neckBase * unit, 0)
+  geometry.computeVertexNormals()
+  const mesh = new THREE.Mesh(geometry, mat)
+  mesh.name = 'head'
+  return mesh
+}
+
+/**
+ * 生成完整人台。
+ *
+ * 结构要点：四肢是圆柱，直接插进躯干会在白色材质下露出平截面接缝，
+ * 所以在每个关节处补一颗球做过渡，并在肢体末端补手脚 ——
+ * 这是把人台从「几根管子拼起来」变成「一件雕塑」的关键。
  */
 export function buildMannequin(profile: BodyProfile): THREE.Group {
   const group = new THREE.Group()
@@ -272,53 +331,68 @@ export function buildMannequin(profile: BodyProfile): THREE.Group {
   const H = profile.heightCm
   const rings = buildTrunkRings(profile)
   const mat = mannequinMaterial()
-  const L = BODY_LANDMARKS
 
-  // 躯干
+  // 躯干：径向分段提到 64，白色表面上分段不足会看出棱面
   const trunk = new THREE.Mesh(
-    loftGeometry(rings, { totalHeightCm: H, scale, radialSegments: 48 }),
+    loftGeometry(rings, { totalHeightCm: H, scale, radialSegments: 64 }),
     mat,
   )
   trunk.name = 'trunk'
   group.add(trunk)
 
-  // 四肢：统一由 limb specs 驱动，保证与服装的袖子/裤腿严格对齐
+  // ── 腿 ──
   for (const leg of buildLegSpecs(profile)) {
-    const geo = new THREE.CylinderGeometry(leg.radiusTop, leg.radiusBottom, leg.length, 24, 1, false)
+    const geo = new THREE.CylinderGeometry(leg.radiusTop, leg.radiusBottom, leg.length, 32, 1, false)
     geo.translate(0, -leg.length / 2, 0)
     const mesh = new THREE.Mesh(geo, mat)
     mesh.position.set(leg.origin.x, leg.origin.y, leg.origin.z)
     mesh.rotation.z = leg.rotationZ
     mesh.name = leg.side < 0 ? 'leg-left' : 'leg-right'
     group.add(mesh)
+
+    // 髋关节球：把「圆柱硬插进躯干」变成自然过渡
+    const hipBall = new THREE.Mesh(new THREE.SphereGeometry(leg.radiusTop * 1.12, 30, 22), mat)
+    hipBall.position.set(leg.origin.x, leg.origin.y, 0)
+    hipBall.name = `${mesh.name}-joint`
+    group.add(hipBall)
+
+    // 脚：向前(+Z)伸出的扁椭球，避免腿以平截面收尾
+    const ankle = limbPointAt(leg, leg.length)
+    const foot = new THREE.Mesh(new THREE.SphereGeometry(leg.radiusBottom * 1.5, 26, 18), mat)
+    foot.scale.set(1.0, 0.5, 1.9)
+    foot.position.set(ankle.x, ankle.y + leg.radiusBottom * 0.35, ankle.z + leg.radiusBottom * 1.15)
+    foot.name = `${mesh.name}-foot`
+    group.add(foot)
   }
 
+  // ── 臂 ──
   for (const arm of buildArmSpecs(profile)) {
-    const geo = new THREE.CylinderGeometry(arm.radiusTop, arm.radiusBottom, arm.length, 20, 1, false)
+    const geo = new THREE.CylinderGeometry(arm.radiusTop, arm.radiusBottom, arm.length, 28, 1, false)
     geo.translate(0, -arm.length / 2, 0)
     const mesh = new THREE.Mesh(geo, mat)
     mesh.position.set(arm.origin.x, arm.origin.y, arm.origin.z)
     mesh.rotation.z = arm.rotationZ
     mesh.name = arm.side < 0 ? 'arm-left' : 'arm-right'
     group.add(mesh)
+
+    // 肩关节球：藏住圆柱顶端的平截面，做出圆润的肩头
+    const shoulderBall = new THREE.Mesh(new THREE.SphereGeometry(arm.radiusTop * 1.28, 30, 22), mat)
+    shoulderBall.position.set(arm.origin.x, arm.origin.y - arm.radiusTop * 0.15, 0)
+    shoulderBall.name = `${mesh.name}-joint`
+    group.add(shoulderBall)
+
+    // 手：扁长的椭球，比平截面收尾自然得多
+    const wrist = limbPointAt(arm, arm.length)
+    const hand = new THREE.Mesh(new THREE.SphereGeometry(arm.radiusBottom * 1.45, 26, 18), mat)
+    hand.scale.set(0.85, 1.6, 0.6)
+    hand.position.set(wrist.x, wrist.y - arm.radiusBottom * 0.9, wrist.z)
+    hand.rotation.z = arm.rotationZ
+    hand.name = `${mesh.name}-hand`
+    group.add(hand)
   }
 
-  // 颈 + 头
-  const neckGeo = new THREE.CylinderGeometry(4.8 * scale, 5.6 * scale, (L.chin - L.neckBase) * H * scale, 20)
-  const neck = new THREE.Mesh(neckGeo, mat)
-  neck.position.set(0, ((L.neckBase + L.chin) / 2) * H * scale, 0)
-  neck.name = 'neck'
-  group.add(neck)
+  // ── 头颈 ──
+  group.add(buildHeadAndNeck(profile, mat))
 
-  // 头部：横向半径约 7.6cm（宽 ~15cm）、纵向放大后高约 19cm，接近真人比例
-  const headRadius = H * 0.0455 * scale
-  const headGeo = new THREE.SphereGeometry(headRadius, 32, 24)
-  headGeo.scale(1, 1.22, 1.06)
-  const head = new THREE.Mesh(headGeo, mat)
-  head.position.set(0, (L.chin + 0.05) * H * scale, 0)
-  head.name = 'head'
-  group.add(head)
-
-  group.position.y = 0
   return group
 }

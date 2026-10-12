@@ -152,8 +152,10 @@ export class Garment {
   private material(): THREE.MeshStandardMaterial {
     return new THREE.MeshStandardMaterial({
       color: this.spec.color,
-      roughness: 0.78,
-      metalness: 0.03,
+      // 接近纯哑光：与人台的亮面树脂形成质感区分，
+      // 否则白色衣服贴在白色人台上会分不出边界
+      roughness: 0.92,
+      metalness: 0.0,
       side: THREE.DoubleSide,
     })
   }
