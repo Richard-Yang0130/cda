@@ -18,6 +18,7 @@
  */
 import * as THREE from 'three'
 import type { BodyProfile, Gender } from '@cda/core'
+import { findBuild, type BodyBuild } from '@cda/core'
 import { polygonize } from './surface-nets'
 import { blobsBounds, compileSdf, type SdfBlob, type Vec3 } from './sdf'
 
@@ -66,12 +67,12 @@ export interface LimbChain {
   rMid: number
   /** 末端半径 */
   rEnd: number
-  /** 肌肉隆起处的半径（肱二头肌 / 小腿肚） */
-  rBulge: number
 }
 
 export interface BodySkeleton {
   gender: Gender
+  /** 形体风格：决定肌肉隆起与脂肪堆积的强度 */
+  build: BodyBuild
   /** 身高（米） */
   height: number
   /** 关键高度（米，y 从脚底起算） */
@@ -159,8 +160,6 @@ export function buildSkeleton(profile: BodyProfile): BodySkeleton {
       rRoot: upperArmR * 0.92,
       rMid,
       rEnd: upperArmR * 0.6,
-      // 肱二头肌：比中关节略粗，平滑并集后形成中段隆起
-      rBulge: upperArmR * 1.06,
     }
   })
 
@@ -177,13 +176,12 @@ export function buildSkeleton(profile: BodyProfile): BodySkeleton {
       // 膝盖直径约 10cm，取 0.6 倍大腿半径；取太小腿会显得细弱
       rMid: thighR * 0.6,
       rEnd: thighR * 0.34,
-      // 小腿肚：偏上位置隆起
-      rBulge: thighR * 0.68,
     }
   })
 
   return {
     gender: profile.gender,
+    build: findBuild(profile.build),
     height: H,
     ankleY, kneeY, hipY, waistY, chestY, shoulderY, chinY, headTopY,
     chest, waist, hip, shoulderHalf,
@@ -205,10 +203,50 @@ export function buildSkeleton(profile: BodyProfile): BodySkeleton {
  * 再在肌肉隆起处加一颗球 —— 平滑并集会自动把它揉成一个鼓包，
  * 于是肱二头肌与小腿肚就出来了，不需要手工雕网格。
  */
+/**
+ * 一块肌腹。
+ *
+ * 肌肉的解剖事实（这也是之前做错的地方）：
+ *   1. 形状是**纺锤形** —— 中间粗、两端连腱变细，不是一个球
+ *   2. 长在肢体的**特定方位**上 —— 肱二头肌在前侧、腘绳肌在后侧、
+ *      股四头肌在前侧、腓肠肌在后侧偏上
+ * 之前直接把球放在肢体轴心上，出来就是「肢体上长了个球」，而且方位全错。
+ *
+ * 这里用沿肢体轴向拉长的椭球，并按解剖方位偏移到前/后/侧。
+ */
+function muscleBelly(
+  a: Vec3,
+  b: Vec3,
+  centerT: number,
+  radiusAcross: number,
+  halfLengthAlong: number,
+  offX: number,
+  offY: number,
+  offZ: number,
+): SdfBlob {
+  return {
+    kind: 'ellipsoid',
+    c: [
+      a[0] + (b[0] - a[0]) * centerT + offX,
+      a[1] + (b[1] - a[1]) * centerT + offY,
+      a[2] + (b[2] - a[2]) * centerT + offZ,
+    ],
+    r: [radiusAcross, halfLengthAlong, radiusAcross],
+  }
+}
+
+function dist3(a: Vec3, b: Vec3): number {
+  const dx = a[0] - b[0], dy = a[1] - b[1], dz = a[2] - b[2]
+  return Math.sqrt(dx * dx + dy * dy + dz * dz)
+}
+
+/** 由骨架生成肉块。见文件头对「骨架→肉块→SDF」管线的说明。 */
 function buildBlobs(s: BodySkeleton): SdfBlob[] {
   const blobs: SdfBlob[] = []
   const male = s.gender === 'male'
   const span = s.shoulderY - s.hipY
+  const mf = s.build.muscleFactor
+  const ff = s.build.fatFactor
 
   // ── 躯干：沿脊柱扫掠的变截面体 ──
   // 一个图元搞定，截面在 胯 → 腰 → 胸 → 肩 之间**连续**变化。
@@ -216,7 +254,6 @@ function buildBlobs(s: BodySkeleton): SdfBlob[] {
   blobs.push({
     kind: 'loft',
     stations: [
-      // 骨盆到底裆必须缓缓收：收得急就会在胯下留一圈「裙边」
       { y: s.hipY - span * 0.2, w: s.hip.w * 0.3, d: s.hip.d * 0.3 },
       { y: s.hipY - span * 0.12, w: s.hip.w * 0.62, d: s.hip.d * 0.58 },
       { y: s.hipY - span * 0.05, w: s.hip.w * 0.92, d: s.hip.d * 0.88 },
@@ -224,60 +261,103 @@ function buildBlobs(s: BodySkeleton): SdfBlob[] {
       { y: s.waistY, w: s.waist.w, d: s.waist.d },
       {
         y: s.chestY,
-        // 男性：胸廓更宽、更平；女性：胸量用「更饱满的截面深度」表达。
-        // 刻意不加两颗球 —— 那会变成两个突兀的疙瘩，作为人台很不体面。
+        // 男性：胸廓更宽、更平；女性：胸量用更饱满的截面深度表达，
+        // 刻意不加两颗球 —— 那会变成突兀的疙瘩，作为人台很不体面
         w: s.chest.w * (male ? 1.08 : 0.98),
         d: s.chest.d * (male ? 1.0 : 1.24),
       },
-      // 肩部要一直保持够宽，让手臂根部落在它里面 ——
-      // 否则肩头会鼓出一个独立的包，像扛了两颗球
-      { y: s.shoulderY - span * 0.02, w: s.shoulderHalf * 0.95, d: s.chest.d * 0.9 },
-      // 斜方肌收口，让颈部平滑接上肩
-      { y: s.shoulderY + span * 0.05, w: s.neckR * 1.5, d: s.neckR * 1.4 },
+      // 肩部这一段要**多给一个中间站位**：否则肩线以上收得太急，
+      // 三角肌无处融合，会变成两块像肩垫一样独立的凸起。
+      // 这个中间站就是斜方肌的坡度。
+      { y: s.shoulderY - span * 0.04, w: s.shoulderHalf * 0.98, d: s.chest.d * 0.92 },
+      { y: s.shoulderY + span * 0.02, w: s.shoulderHalf * 0.74, d: s.chest.d * 0.72 },
+      { y: s.shoulderY + span * 0.09, w: s.neckR * 1.4, d: s.neckR * 1.3 },
     ],
   })
 
-  // ── 臀：向后隆起，女性更明显 ──
-  const buttR = s.hip.w * (male ? 0.4 : 0.44)
+  // ── 臀大肌：向后偏、上下略扁的软组织，不是球。脂肪型更饱满 ──
+  const gluteR = s.hip.w * (male ? 0.4 : 0.44) * (1 + ff * 0.45)
   for (const side of [-1, 1] as const) {
     blobs.push({
-      kind: 'sphere',
+      kind: 'ellipsoid',
       c: [side * s.hip.w * 0.38, s.hipY - span * 0.03, -s.hip.d * (male ? 0.58 : 0.64)],
-      r: buttR,
+      r: [gluteR, gluteR * 0.85, gluteR * 0.82],
     })
   }
 
+  // ── 脂肪：腹部 + 腰侧。真人脂肪优先堆在这两处，而不是均匀变胖 ──
+  if (ff > 0.12) {
+    blobs.push({
+      kind: 'ellipsoid',
+      c: [0, s.waistY - span * 0.05, s.waist.d * (0.4 + ff * 0.45)],
+      r: [s.waist.w * (0.5 + ff * 0.32), span * 0.15, s.waist.d * (0.5 + ff * 0.4)],
+    })
+    for (const side of [-1, 1] as const) {
+      blobs.push({
+        kind: 'ellipsoid',
+        c: [side * s.waist.w * 0.82, s.waistY - span * 0.02, 0],
+        r: [s.waist.w * 0.22 * ff, span * 0.11, s.waist.d * 0.5],
+      })
+    }
+  }
+
+  // ── 胸大肌：只在肌肉型且男性时做出明显胸肌分界；
+  //    女性的胸量仍由躯干截面的饱满度表达 ──
+  if (male && mf > 1.1) {
+    for (const side of [-1, 1] as const) {
+      blobs.push({
+        kind: 'ellipsoid',
+        c: [side * s.chest.w * 0.42, s.chestY - span * 0.02, s.chest.d * (0.46 + mf * 0.08)],
+        r: [s.chest.w * 0.3, span * 0.1, s.chest.d * 0.2],
+      })
+    }
+  }
+
   // ── 颈 ──
-  const neckTop = s.chinY
   blobs.push({
     kind: 'capsule',
     a: [0, s.shoulderY - 0.01, 0],
-    b: [0, neckTop, 0.006],
+    b: [0, s.chinY, 0.006],
     r: s.neckR,
   })
 
-  // ── 头：颅 + 下颌两段椭球，平滑并集后形成蛋形人台头 ──
-  const headC = s.chinY + s.head.h * 0.52
+  // ── 头：颅 + 下颌两段椭球 ──
   blobs.push({
     kind: 'ellipsoid',
-    c: [0, headC + s.head.h * 0.1, 0],
+    c: [0, s.chinY + s.head.h * 0.62, 0],
     r: [s.head.w * 0.52, s.head.h * 0.44, s.head.d * 0.55],
   })
   blobs.push({
     kind: 'ellipsoid',
-    c: [0, s.chinY + s.head.h * 0.2, s.head.d * 0.06],
+    c: [0, s.chinY + s.head.h * 0.22, s.head.d * 0.06],
     r: [s.head.w * 0.42, s.head.h * 0.26, s.head.d * 0.46],
   })
 
-  // ── 四肢 ──
+  // 肌腹相对肢体半径的比例：muscleFactor=1 约 0.66，肌肉型约 0.86，脂肪型约 0.53
+  const mu = 0.42 + 0.24 * mf
+
+  // ── 上肢 ──
   for (const arm of s.arms) {
     blobs.push({ kind: 'roundcone', a: arm.root, b: arm.mid, r1: arm.rRoot, r2: arm.rMid })
     blobs.push({ kind: 'roundcone', a: arm.mid, b: arm.end, r1: arm.rMid, r2: arm.rEnd })
-    // 肱二头肌
-    const bx = arm.root[0] + (arm.mid[0] - arm.root[0]) * 0.45
-    const by = arm.root[1] + (arm.mid[1] - arm.root[1]) * 0.45
-    const bz = arm.root[2] + (arm.mid[2] - arm.root[2]) * 0.45
-    blobs.push({ kind: 'sphere', c: [bx, by, bz], r: arm.rBulge })
+
+    const upperLen = dist3(arm.root, arm.mid)
+    const foreLen = dist3(arm.mid, arm.end)
+    const R = arm.rRoot
+
+    // 三角肌：盖住肩头、略偏外侧，让肩呈圆润的坡度而不是直角
+    blobs.push(muscleBelly(arm.root, arm.mid, 0.08, R * mu * 1.15, R * 0.78,
+      arm.side * R * 0.2, R * 0.34, 0))
+    // 肱二头肌：**前侧**
+    blobs.push(muscleBelly(arm.root, arm.mid, 0.45, R * mu, upperLen * 0.28, 0, 0, R * 0.42))
+    // 肱三头肌：**后侧**
+    blobs.push(muscleBelly(arm.root, arm.mid, 0.5, R * mu * 0.92, upperLen * 0.3, 0, 0, -R * 0.4))
+    // 前臂肌群：靠肘部
+    blobs.push(muscleBelly(arm.mid, arm.end, 0.28, arm.rMid * mu * 0.85, foreLen * 0.3, 0, 0, -arm.rMid * 0.3))
+    // 上臂后侧脂肪（脂肪型才有）
+    if (ff > 0.5) {
+      blobs.push(muscleBelly(arm.root, arm.mid, 0.5, R * 0.3 * ff, upperLen * 0.3, 0, 0, -R * 0.5))
+    }
     // 手
     blobs.push({
       kind: 'ellipsoid',
@@ -286,15 +366,27 @@ function buildBlobs(s: BodySkeleton): SdfBlob[] {
     })
   }
 
+  // ── 下肢 ──
   for (const leg of s.legs) {
     blobs.push({ kind: 'roundcone', a: leg.root, b: leg.mid, r1: leg.rRoot, r2: leg.rMid })
     blobs.push({ kind: 'roundcone', a: leg.mid, b: leg.end, r1: leg.rMid, r2: leg.rEnd })
-    // 小腿肚：偏上
-    const cx2 = leg.mid[0] + (leg.end[0] - leg.mid[0]) * 0.28
-    const cy2 = leg.mid[1] + (leg.end[1] - leg.mid[1]) * 0.28
-    const cz2 = leg.mid[2] + (leg.end[2] - leg.mid[2]) * 0.28 - leg.rBulge * 0.25
-    blobs.push({ kind: 'sphere', c: [cx2, cy2, cz2], r: leg.rBulge })
-    // 脚：沿 +Z 伸出的圆棒，底面落在 y=0 附近，读起来像鞋楦
+
+    const thighLen = dist3(leg.root, leg.mid)
+    const calfLen = dist3(leg.mid, leg.end)
+    const R = leg.rRoot
+
+    // 股四头肌：**前侧**
+    blobs.push(muscleBelly(leg.root, leg.mid, 0.32, R * mu, thighLen * 0.32, 0, 0, R * 0.42))
+    // 腘绳肌：**后侧**
+    blobs.push(muscleBelly(leg.root, leg.mid, 0.42, R * mu * 0.9, thighLen * 0.3, 0, 0, -R * 0.36))
+    // 腓肠肌：小腿**后侧偏上** —— 这就是小腿肚
+    blobs.push(muscleBelly(leg.mid, leg.end, 0.26, leg.rMid * mu * 0.95, calfLen * 0.26, 0, 0, -leg.rMid * 0.4))
+    // 大腿脂肪：外侧 + 内侧
+    if (ff > 0.5) {
+      blobs.push(muscleBelly(leg.root, leg.mid, 0.4, R * 0.34 * ff, thighLen * 0.34, -leg.side * R * 0.45, 0, 0))
+      blobs.push(muscleBelly(leg.root, leg.mid, 0.35, R * 0.28 * ff, thighLen * 0.3, leg.side * R * 0.4, 0, 0))
+    }
+    // 脚
     const soleR = s.ankleR * 0.95
     blobs.push({
       kind: 'capsule',

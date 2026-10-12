@@ -3,7 +3,7 @@
  * 后续接入真实 API 时，只需把这里替换为请求层，上层组件不用改。
  */
 import type { Product, WardrobeItem, BodyProfile, Gender } from './types'
-import { buildProfileFromPreset } from './presets'
+
 
 export const mockProducts: Product[] = [
   {
@@ -98,11 +98,50 @@ export const mockProducts: Product[] = [
 /**
  * 默认身型。
  *
- * 现在委托给「写实」预设 —— 比例由头身比统一推导，
- * 而不是散落的魔法数字。用户可在预设基础上微调。
+ * 这些是成年人的常见比例，作为用户微调的起点。
+ * 注意「形体风格」不在这里 —— 它由 profile.build 决定（见 presets.ts）：
+ * 风格管形体语言（偏肌肉还是偏脂肪），数字管实际维度。
  */
 export function defaultBodyProfile(gender: Gender = 'female'): BodyProfile {
-  return buildProfileFromPreset('realistic', gender)
+  if (gender === 'male') {
+    return {
+      gender: 'male',
+      build: 'average',
+      heightCm: 176,
+      weightKg: 70,
+      chestCm: 96,
+      waistCm: 82,
+      hipCm: 95,
+      upperArmCircCm: 32,
+      thighCircCm: 56,
+      shoulderWidthCm: 45,
+      torsoLengthCm: 47,
+      neckLengthCm: 11,
+      // 肩到腕 ≈ 0.34 × 身高，这是真人比例
+      upperArmCm: 33,
+      forearmCm: 27,
+      thighCm: 47,
+      calfCm: 43,
+    }
+  }
+  return {
+    gender: 'female',
+    build: 'average',
+    heightCm: 165,
+    weightKg: 54,
+    chestCm: 86,
+    waistCm: 67,
+    hipCm: 92,
+    upperArmCircCm: 26,
+    thighCircCm: 52,
+    shoulderWidthCm: 39,
+    torsoLengthCm: 43,
+    neckLengthCm: 9,
+    upperArmCm: 31,
+    forearmCm: 25,
+    thighCm: 43,
+    calfCm: 39,
+  }
 }
 
 /** 用户衣橱（演示用） */

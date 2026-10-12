@@ -122,9 +122,17 @@ export interface Product {
 /** 性别。只影响体块轮廓（肩宽/腰臀比/胸廓/骨盆/四肢粗细），不做私密部位 */
 export type Gender = 'male' | 'female'
 
+/** 形体风格 id（见 presets.ts 的 BODY_BUILDS） */
+export type BodyBuildId = 'average' | 'muscular' | 'plump'
+
 /** 用户身型数据 —— 亮点2 的输入 */
 export interface BodyProfile {
   gender: Gender
+  /**
+   * 形体风格。决定「偏肌肉还是偏脂肪」，
+   * 与具体尺寸分工：预设管形体语言，数据管实际维度。
+   */
+  build: BodyBuildId
 
   // ── 基础 ──
   heightCm: number

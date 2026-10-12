@@ -45,20 +45,7 @@
         <text class="card-note">拖动人偶可旋转</text>
       </view>
 
-      <text class="group-title">角色比例</text>
-      <view class="preset-row">
-        <view
-          v-for="p in presets"
-          :key="p.id"
-          class="preset-chip"
-          :class="{ active: activePreset === p.id }"
-          @click="applyPreset(p.id)"
-        >
-          <text>{{ p.name }}</text>
-        </view>
-      </view>
-      <text class="preset-desc">{{ activePresetDesc }}</text>
-
+      <text class="group-title">性别</text>
       <view class="gender-row">
         <view
           v-for="g in genders"
@@ -71,24 +58,66 @@
         </view>
       </view>
 
-      <view v-for="group in measureGroups" :key="group.title" class="measure-group">
-        <text class="group-title">{{ group.title }}</text>
-        <view v-for="m in group.fields" :key="m.key" class="slider-row">
-          <text class="slider-label">{{ m.label }}</text>
-          <slider
-            class="slider"
-            :value="body[m.key]"
-            :min="m.min"
-            :max="m.max"
-            :step="1"
-            activeColor="#1a1a1a"
-            block-color="#1a1a1a"
-            :block-size="16"
-            @changing="(e: any) => onMeasureChange(m.key, e.detail.value, 'changing')"
-            @change="(e: any) => onMeasureChange(m.key, e.detail.value, 'change')"
-          />
-          <text class="slider-value">{{ body[m.key] }}{{ m.unit }}</text>
+      <text class="group-title">形体风格</text>
+      <view class="preset-row">
+        <view
+          v-for="b in builds"
+          :key="b.id"
+          class="preset-chip"
+          :class="{ active: body.build === b.id }"
+          @click="setBuild(b.id)"
+        >
+          <text>{{ b.name }}</text>
         </view>
+      </view>
+      <text class="preset-desc">{{ activeBuildDesc }}</text>
+
+      <text class="group-title">基础</text>
+      <view v-for="m in basicFields" :key="m.key" class="slider-row">
+        <text class="slider-label">{{ m.label }}</text>
+        <slider
+          class="slider"
+          :value="body[m.key]"
+          :min="m.min"
+          :max="m.max"
+          :step="1"
+          activeColor="#1a1a1a"
+          block-color="#1a1a1a"
+          :block-size="16"
+          @changing="(e: any) => onMeasureChange(m.key, e.detail.value, 'changing')"
+          @change="(e: any) => onMeasureChange(m.key, e.detail.value, 'change')"
+        />
+        <text class="slider-value">{{ body[m.key] }}{{ m.unit }}</text>
+      </view>
+
+      <text class="group-title">分区调整</text>
+      <view class="stage-row">
+        <view
+          v-for="s in stages"
+          :key="s.id"
+          class="stage-chip"
+          :class="{ active: activeStage === s.id }"
+          @click="activeStage = s.id"
+        >
+          <text>{{ s.name }}</text>
+        </view>
+      </view>
+
+      <view v-for="m in stageFields[activeStage]" :key="m.key" class="slider-row">
+        <text class="slider-label">{{ m.label }}</text>
+        <slider
+          class="slider"
+          :value="body[m.key]"
+          :min="m.min"
+          :max="m.max"
+          :step="1"
+          activeColor="#1a1a1a"
+          block-color="#1a1a1a"
+          :block-size="16"
+          @changing="(e: any) => onMeasureChange(m.key, e.detail.value, 'changing')"
+          @change="(e: any) => onMeasureChange(m.key, e.detail.value, 'change')"
+        />
+        <text class="slider-value">{{ body[m.key] }}{{ m.unit }}</text>
       </view>
 
       <view class="normalize-hint">
@@ -183,7 +212,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, nextTick, ref, reactive, computed } from 'vue'
 import { onShow } from '@dcloudio/uni-app'
-import { findProduct, BODY_PRESETS, buildProfileFromPreset, CATEGORY_LABEL, type Category, type WearMode } from '@cda/core'
+import { findProduct, defaultBodyProfile, BODY_BUILDS, CATEGORY_LABEL, type BodyBuildId, type Category, type WearMode } from '@cda/core'
 import { TryonEngine, createH5Platform, WEAR_MODE_LABEL, GARMENT_REGISTRY } from '@cda/tryon-engine'
 import { mountStage, type StageHost } from '@/platform/stage'
 import { store } from '@/store/app-store'
@@ -212,48 +241,52 @@ interface MeasureField {
   max: number
 }
 
-const measureGroups: Array<{ title: string; fields: MeasureField[] }> = [
-  {
-    title: '基础',
-    fields: [
-      { key: 'heightCm', label: '身高', unit: 'cm', min: 145, max: 205 },
-      { key: 'weightKg', label: '体重', unit: 'kg', min: 35, max: 130 },
-      { key: 'shoulderWidthCm', label: '肩宽', unit: 'cm', min: 32, max: 56 },
-    ],
-  },
-  {
-    title: '围度',
-    fields: [
-      { key: 'chestCm', label: '胸围', unit: 'cm', min: 68, max: 130 },
-      { key: 'waistCm', label: '腰围', unit: 'cm', min: 50, max: 130 },
-      { key: 'hipCm', label: '臀围', unit: 'cm', min: 72, max: 140 },
-      { key: 'upperArmCircCm', label: '大臂围', unit: 'cm', min: 20, max: 45 },
-      { key: 'thighCircCm', label: '大腿围', unit: 'cm', min: 38, max: 80 },
-    ],
-  },
-  {
-    title: '长度',
-    fields: [
-      { key: 'torsoLengthCm', label: '上身长', unit: 'cm', min: 34, max: 62 },
-      { key: 'neckLengthCm', label: '颈长', unit: 'cm', min: 5, max: 18 },
-      { key: 'upperArmCm', label: '大臂长', unit: 'cm', min: 22, max: 42 },
-      { key: 'forearmCm', label: '小臂长', unit: 'cm', min: 18, max: 34 },
-      { key: 'thighCm', label: '大腿长', unit: 'cm', min: 34, max: 60 },
-      { key: 'calfCm', label: '小腿长', unit: 'cm', min: 28, max: 52 },
-    ],
-  },
+/** 分区建模：按游戏捏人的习惯分段，而不是一次给一长条滑杆 */
+type StageId = 'head' | 'upper' | 'lower'
+
+const stages: Array<{ id: StageId; name: string }> = [
+  { id: 'head', name: '头颈' },
+  { id: 'upper', name: '上半身' },
+  { id: 'lower', name: '下半身' },
 ]
+
+const activeStage = ref<StageId>('upper')
+
+/** 基础数据不分阶段，始终显示 */
+const basicFields: MeasureField[] = [
+  { key: 'heightCm', label: '身高', unit: 'cm', min: 145, max: 205 },
+  { key: 'weightKg', label: '体重', unit: 'kg', min: 35, max: 130 },
+]
+
+/** 各阶段的可调参数 */
+const stageFields: Record<StageId, MeasureField[]> = {
+  head: [{ key: 'neckLengthCm', label: '颈长', unit: 'cm', min: 5, max: 18 }],
+  upper: [
+    { key: 'shoulderWidthCm', label: '肩宽', unit: 'cm', min: 32, max: 56 },
+    { key: 'chestCm', label: '胸围', unit: 'cm', min: 68, max: 130 },
+    { key: 'waistCm', label: '腰围', unit: 'cm', min: 50, max: 130 },
+    { key: 'torsoLengthCm', label: '上身长', unit: 'cm', min: 34, max: 62 },
+    { key: 'upperArmCircCm', label: '大臂围', unit: 'cm', min: 20, max: 45 },
+    { key: 'upperArmCm', label: '大臂长', unit: 'cm', min: 22, max: 42 },
+    { key: 'forearmCm', label: '小臂长', unit: 'cm', min: 18, max: 34 },
+  ],
+  lower: [
+    { key: 'hipCm', label: '臀围', unit: 'cm', min: 72, max: 140 },
+    { key: 'thighCircCm', label: '大腿围', unit: 'cm', min: 38, max: 80 },
+    { key: 'thighCm', label: '大腿长', unit: 'cm', min: 34, max: 60 },
+    { key: 'calfCm', label: '小腿长', unit: 'cm', min: 28, max: 52 },
+  ],
+}
 
 const genders = [
   { value: 'female' as const, label: '女性' },
   { value: 'male' as const, label: '男性' },
 ]
 
-/** 角色比例预设（写实 / 时装插画 / 动漫 / 游戏英雄） */
-const presets = BODY_PRESETS
-const activePreset = ref('realistic')
-const activePresetDesc = computed(
-  () => presets.find((p) => p.id === activePreset.value)?.description ?? '',
+/** 形体风格：定「偏肌肉还是偏脂肪」，具体维度仍由上面的数据决定 */
+const builds = BODY_BUILDS
+const activeBuildDesc = computed(
+  () => builds.find((b) => b.id === body.build)?.description ?? '',
 )
 
 /**
@@ -419,24 +452,25 @@ function onMeasureChange(key: string, value: number, phase: 'changing' | 'change
   engine?.setBodyProfile({ ...body }, 'final')
 }
 
-/** 切换性别：套用当前预设的对应性别版本 */
+/** 切换性别：套用对应的默认数据，保留形体风格 */
 function setGender(gender: 'male' | 'female') {
   if (body.gender === gender) return
-  Object.assign(body, buildProfileFromPreset(activePreset.value, gender, body.heightCm))
+  const next = defaultBodyProfile(gender)
+  next.build = body.build
+  next.heightCm = body.heightCm
+  Object.assign(body, next)
   Object.assign(store.body, body)
   engine?.setBodyProfile({ ...body }, 'final')
 }
 
 /**
- * 套用角色比例预设。
- *
- * 这是「好看」的关键：预设自带一套美学比例（头身比、肩宽/头宽、
- * 腰臀比），用户在它基础上微调局部即可，而不是从零调一堆围度。
- * 身高保留用户当前值 —— 那是用户自己的身体数据，不该被预设覆盖。
+ * 切换形体风格。
+ * 它只改变形体语言（肌肉隆起、脂肪堆积），**不改任何尺寸数字** ——
+ * 尺寸是用户自己的身体数据。
  */
-function applyPreset(id: string) {
-  activePreset.value = id
-  Object.assign(body, buildProfileFromPreset(id, body.gender, body.heightCm))
+function setBuild(id: BodyBuildId) {
+  if (body.build === id) return
+  body.build = id
   Object.assign(store.body, body)
   engine?.setBodyProfile({ ...body }, 'final')
 }
@@ -814,6 +848,33 @@ function onItemClick(item: { productId: string }) {
 
 .measure-group {
   margin-bottom: 10px;
+}
+.stage-row {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.stage-chip {
+  flex: 1;
+  height: 34px;
+  border-radius: 10px;
+  background: #f5f5f5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1.5px solid transparent;
+}
+.stage-chip text {
+  font-size: 12px;
+  color: #555;
+}
+.stage-chip.active {
+  border-color: #1a1a1a;
+  background: #ffffff;
+}
+.stage-chip.active text {
+  color: #1a1a1a;
+  font-weight: 600;
 }
 .group-title {
   display: block;
