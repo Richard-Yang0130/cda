@@ -377,6 +377,7 @@ export class MeshBody implements BodySurface {
     pos.needsUpdate = true
     this.geo.computeVertexNormals()
     this.geo.computeBoundingSphere()
+
   }
 
   private nearestAxis(list: LimbAxis[], y: number): LimbAxis | null {
