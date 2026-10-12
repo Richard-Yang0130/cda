@@ -74,14 +74,42 @@ export interface Product {
   sizes: string[]
 }
 
+/** 性别。只影响体块轮廓（肩宽/腰臀比/胸廓/骨盆/四肢粗细），不做私密部位 */
+export type Gender = 'male' | 'female'
+
 /** 用户身型数据 —— 亮点2 的输入 */
 export interface BodyProfile {
+  gender: Gender
+
+  // ── 基础 ──
   heightCm: number
   weightKg: number
-  bustCm?: number
-  waistCm?: number
-  hipCm?: number
-  shoulderCm?: number
+
+  // ── 围度 ──
+  /** 胸围 */
+  chestCm: number
+  waistCm: number
+  hipCm: number
+  /** 大臂围（放松状态） */
+  upperArmCircCm: number
+  /** 大腿围（根部最粗处） */
+  thighCircCm: number
+
+  // ── 长度与宽度 ──
+  /** 肩宽：左右肩峰之间的距离 */
+  shoulderWidthCm: number
+  /** 上身长：肩线到胯 */
+  torsoLengthCm: number
+  /** 颈长：肩线到下巴 */
+  neckLengthCm: number
+  /** 大臂长：肩到肘 */
+  upperArmCm: number
+  /** 小臂长：肘到腕 */
+  forearmCm: number
+  /** 大腿长：胯到膝 */
+  thighCm: number
+  /** 小腿长：膝到踝 */
+  calfCm: number
 }
 
 /** 用户拥有的一件单品 —— 亮点1 的数据基础 */

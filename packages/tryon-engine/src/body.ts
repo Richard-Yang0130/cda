@@ -1,282 +1,374 @@
 /**
- * 参数化人体 —— 亮点2 的输入环节。
+ * 参数化人体 —— 由身型数据生成连续肉体。
  *
- * 设计取舍（重要）：
- * 我们没有用 SMPL / SMPL-X / MHR 这类真实扫描人体模型，原因是
- *   1. SMPL 系列是**科研许可**，商用要付费，整个项目会被 License 卡死；
- *   2. MHR 虽是 Apache-2.0，但权重较大，且 demo 阶段没必要背这个包袱；
- *   3. 本机 huggingface.co 被网络阻断，下载模型不可靠。
+ * 范式（参考逆水寒 / 燕云十六声那类角色创建器）：
+ *   1. 身型数据 → **骨架**（各段长度、关节位置）
+ *   2. 骨架 → **肉块列表**（变径胶囊链，中段半径隆起 = 肌肉）
+ *   3. 肉块平滑并集 → **SDF**
+ *   4. SDF → **Surface Nets 多边形化** → 网格
  *
- * 因此这里用**程序化生成的风格化人偶**：躯干由若干横截面（椭圆环）放样而成，
- * 每个环的半宽/半深直接由用户的身高体重三围推导。
+ * 为什么不用显式的「躯干放样 + 圆柱四肢 + 球关节」：
+ *   拼装件之间必然有接缝与硬过渡，而且圆柱半径沿轴线性变化，
+ *   做不出肱二头肌那种中段鼓起的轮廓 —— 所以怎么调都像积木。
+ *   SDF 的平滑并集让肉块真正「长在一起」，肌肉线条是自然涌现的。
  *
- * 好处：零外部资源、秒级生成、身型参数改动人偶立刻变形 —— 恰好是
- * 「导入身型数据 → 生成人偶」这条链路最直观的演示。
- * 后续若接入真实模型，只需替换本文件的 buildMannequin 实现，接口不变。
+ * 关于私密部位：**刻意不做**。性别差异通过肩宽、腰臀比、胸廓、骨盆、
+ * 四肢粗细这些体块轮廓来表达，不用生殖器 —— 这既是合规与观感考虑，
+ * 也是服装展示人台的行业惯例。
  */
 import * as THREE from 'three'
-import type { BodyProfile } from '@cda/core'
+import type { BodyProfile, Gender } from '@cda/core'
+import { polygonize } from './surface-nets'
+import { blobsBounds, compileSdf, type SdfBlob, type Vec3 } from './sdf'
 
-/** 人体在归一化高度 t 处的一个横截面（t: 0=脚底, 1=头顶） */
-export interface BodyRing {
-  t: number
-  /** 左右半宽，单位 cm */
-  rx: number
-  /** 前后半深，单位 cm */
-  rz: number
-}
+// ────────────────────────────────────────────────────────────
+// 几何辅助
+// ────────────────────────────────────────────────────────────
 
-/** 人体关键截面的归一化高度，按成年女性平均比例取值 */
-export const BODY_LANDMARKS = {
-  ankle: 0.04,
-  knee: 0.28,
-  crotch: 0.45,
-  hip: 0.47,
-  waist: 0.62,
-  underBust: 0.68,
-  bust: 0.72,
-  shoulder: 0.82,
-  neckBase: 0.86,
-  chin: 0.875,
-  headTop: 1.0,
-} as const
-
-/**
- * 由围度估算椭圆半轴。
- * 圆周长 C = 2πr，椭圆形需要修正；这里用一个经验系数近似，
- * 对风格化人偶来说精度足够（真实拟合误差本来就有 2–4cm）。
- */
-function radiusFromCircumference(cm: number): number {
-  return cm / 5.8
+/** 椭圆周长（Ramanujan 近似） */
+function ellipsePerimeter(a: number, b: number): number {
+  const h = ((a - b) / (a + b)) ** 2
+  return Math.PI * (a + b) * (1 + (3 * h) / (10 + Math.sqrt(4 - 3 * h)))
 }
 
 /**
- * 四肢参数。
- *
- * 抽成共享结构的意义：**人偶的手臂/腿 与 衣服的袖子/裤腿 必须严格对齐**。
- * 如果两边各自硬编码一套数值，改身型时就会立刻漂移（袖子穿不进手臂）。
- * 所以 body.ts 生成人偶、garment.ts 生成袖子，用的都是这里的同一份数据。
+ * 由围度反解椭圆半轴。
+ * 围度是用户最容易量的数据，但它对应的是周长，需要解出横/纵半轴才能建模。
+ * 给定深度比（b/a）后做一次二分即可。
  */
-export interface LimbSpec {
+function semiAxes(C: number, depthRatio: number): { w: number; d: number } {
+  let lo = (C / (2 * Math.PI)) * 0.6
+  let hi = (C / (2 * Math.PI)) * 1.4
+  for (let i = 0; i < 36; i++) {
+    const mid = (lo + hi) / 2
+    if (ellipsePerimeter(mid, mid * depthRatio) < C) lo = mid
+    else hi = mid
+  }
+  const a = (lo + hi) / 2
+  return { w: a, d: a * depthRatio }
+}
+
+// ────────────────────────────────────────────────────────────
+// 骨架
+// ────────────────────────────────────────────────────────────
+
+export interface LimbChain {
   side: -1 | 1
-  /** 根部世界坐标（米） */
-  origin: { x: number; y: number; z: number }
-  /** 仅绕 Z 轴倾斜（弧度） */
-  rotationZ: number
-  /** 长度（米） */
-  length: number
-  /** 根部半径（米） */
-  radiusTop: number
-  /** 末端半径（米） */
-  radiusBottom: number
+  /** 根部（肩 / 胯） */
+  root: Vec3
+  /** 中关节（肘 / 膝） */
+  mid: Vec3
+  /** 末端（腕 / 踝） */
+  end: Vec3
+  /** 根部半径 */
+  rRoot: number
+  /** 中关节半径 */
+  rMid: number
+  /** 末端半径 */
+  rEnd: number
+  /** 肌肉隆起处的半径（肱二头肌 / 小腿肚） */
+  rBulge: number
 }
 
-/** 沿肢体方向、距根部 d 米处的中心点。d 可为负（向上延伸，用于裤腰） */
-export function limbPointAt(limb: LimbSpec, d: number): { x: number; y: number; z: number } {
-  const s = Math.sin(limb.rotationZ)
-  const c = Math.cos(limb.rotationZ)
-  // 局部坐标 (0, -d, 0) 绕 Z 轴旋转后再平移到 origin
+export interface BodySkeleton {
+  gender: Gender
+  /** 身高（米） */
+  height: number
+  /** 关键高度（米，y 从脚底起算） */
+  ankleY: number
+  kneeY: number
+  hipY: number
+  waistY: number
+  chestY: number
+  shoulderY: number
+  chinY: number
+  headTopY: number
+
+  /** 胸腔半宽/半深 */
+  chest: { w: number; d: number }
+  /** 腰部 */
+  waist: { w: number; d: number }
+  /** 骨盆 */
+  hip: { w: number; d: number }
+  /** 肩半宽 */
+  shoulderHalf: number
+
+  arms: LimbChain[]
+  legs: LimbChain[]
+
+  /** 头大小 */
+  head: { w: number; h: number; d: number }
+  /** 颈半径 */
+  neckR: number
+  /** 脚踝半径 */
+  ankleR: number
+}
+
+export function buildSkeleton(profile: BodyProfile): BodySkeleton {
+  const male = profile.gender === 'male'
+  const H = profile.heightCm / 100
+
+  // ── 纵向分段先归一化，保证各段之和恰好等于身高 ──
+  // 用户给的数据常常不自洽（比如各段加起来不等于身高），
+  // 直接照用会让人偶比例崩掉。这里统一按比例缩放，既不丢失用户意图，
+  // 又保证模型一定站得完整。
+  const rawAnkle = 0.045 * H
+  const rawHead = 0.13 * H
+  const rawCalf = profile.calfCm / 100
+  const rawThigh = profile.thighCm / 100
+  const rawTorso = profile.torsoLengthCm / 100
+  const rawNeck = profile.neckLengthCm / 100
+  const total = rawAnkle + rawCalf + rawThigh + rawTorso + rawNeck + rawHead
+  const k = total > 0 ? H / total : 1
+
+  const ankleY = rawAnkle * k
+  const kneeY = ankleY + rawCalf * k
+  const hipY = kneeY + rawThigh * k
+  const shoulderY = hipY + rawTorso * k
+  const chinY = shoulderY + rawNeck * k
+  const headTopY = chinY + rawHead * k
+
+  // ── 横断面 ──
+  const chest = semiAxes(profile.chestCm / 100, male ? 0.8 : 0.74)
+  const waist = semiAxes(profile.waistCm / 100, male ? 0.82 : 0.78)
+  const hip = semiAxes(profile.hipCm / 100, male ? 0.78 : 0.76)
+  const shoulderHalf = profile.shoulderWidthCm / 200
+
+  const waistY = hipY + (shoulderY - hipY) * 0.26
+  const chestY = hipY + (shoulderY - hipY) * 0.74
+
+  // ── 四肢 ──
+  const upperArmR = semiAxes(profile.upperArmCircCm / 100, 0.94).w
+  const thighR = semiAxes(profile.thighCircCm / 100, 0.95).w
+  const armTilt = male ? 0.17 : 0.14
+  const upperLen = profile.upperArmCm / 100
+  const foreLen = profile.forearmCm / 100
+  const thighLen = profile.thighCm / 100
+  const calfLen = profile.calfCm / 100
+
+  const arms: LimbChain[] = ([-1, 1] as const).map((side) => {
+    const rootX = side * shoulderHalf * 0.86
+    const root: Vec3 = [rootX, shoulderY - 0.012, 0]
+    const elbowX = rootX + side * Math.sin(armTilt) * upperLen
+    const elbow: Vec3 = [elbowX, root[1] - Math.cos(armTilt) * upperLen, 0.012 * upperLen]
+    const wristX = elbowX + side * Math.sin(armTilt * 0.7) * foreLen
+    const wrist: Vec3 = [wristX, elbow[1] - Math.cos(armTilt * 0.7) * foreLen, elbow[2] + 0.01]
+    const rMid = upperArmR * 0.82
+    return {
+      side, root, mid: elbow, end: wrist,
+      rRoot: upperArmR * 0.92,
+      rMid,
+      rEnd: upperArmR * 0.6,
+      // 肱二头肌：比中关节略粗，平滑并集后形成中段隆起
+      rBulge: upperArmR * 1.06,
+    }
+  })
+
+  const legs: LimbChain[] = ([-1, 1] as const).map((side) => {
+    const rootX = side * hip.w * 0.48
+    const root: Vec3 = [rootX, hipY, 0]
+    const kneeX = side * hip.w * 0.44
+    const knee: Vec3 = [kneeX, hipY - thighLen, 0.008]
+    const ankleX = side * hip.w * 0.4
+    const ankle: Vec3 = [ankleX, knee[1] - calfLen, 0]
+    return {
+      side, root, mid: knee, end: ankle,
+      rRoot: thighR * 1.0,
+      // 膝盖直径约 10cm，取 0.6 倍大腿半径；取太小腿会显得细弱
+      rMid: thighR * 0.6,
+      rEnd: thighR * 0.34,
+      // 小腿肚：偏上位置隆起
+      rBulge: thighR * 0.68,
+    }
+  })
+
   return {
-    x: limb.origin.x + d * s,
-    y: limb.origin.y - d * c,
-    z: limb.origin.z,
+    gender: profile.gender,
+    height: H,
+    ankleY, kneeY, hipY, waistY, chestY, shoulderY, chinY, headTopY,
+    chest, waist, hip, shoulderHalf,
+    arms, legs,
+    head: { w: 0.092 * H, h: 0.134 * H, d: 0.108 * H },
+    neckR: Math.max(0.042, chest.w * 0.3),
+    ankleR: legs[0]!.rEnd,
   }
 }
 
-/** 肢体在距根部 d 米处的半径（线性收窄，d 超出范围时外推） */
-export function limbRadiusAt(limb: LimbSpec, d: number): number {
-  const t = d / limb.length
-  return limb.radiusTop + (limb.radiusBottom - limb.radiusTop) * t
-}
-
-export function buildArmSpecs(p: BodyProfile): LimbSpec[] {
-  const scale = 0.01
-  const H = p.heightCm
-  const bust = p.bustCm ?? p.weightKg * 1.55
-  const shoulder = p.shoulderCm ?? bust * 0.42
-  const radiusTop = (bust * 0.052) * scale
-
-  return ([-1, 1] as const).map((side) => ({
-    side,
-    origin: {
-      x: side * (shoulder / 2) * scale,
-      y: BODY_LANDMARKS.shoulder * H * scale,
-      z: 0,
-    },
-    rotationZ: side * 0.13,
-    // 手腕应落在胯部附近（约 0.47H）。原先算到 0.36H，手臂长过胯，
-    // 视觉上像猿臂 —— 这也是袖子看起来拖沓的根因。
-    length: (BODY_LANDMARKS.shoulder - 0.47) * H * scale,
-    radiusTop,
-    radiusBottom: radiusTop * 0.66,
-  }))
-}
-
-export function buildLegSpecs(p: BodyProfile): LimbSpec[] {
-  const scale = 0.01
-  const H = p.heightCm
-  const hipR = radiusFromCircumference(p.hipCm ?? p.weightKg * 1.62)
-  const radiusTop = hipR * 0.43 * scale
-
-  return ([-1, 1] as const).map((side) => ({
-    side,
-    origin: {
-      x: side * hipR * 0.46 * scale,
-      y: BODY_LANDMARKS.hip * H * scale,
-      z: 0,
-    },
-    rotationZ: side * -0.02,
-    length: (BODY_LANDMARKS.hip - BODY_LANDMARKS.ankle) * H * scale,
-    radiusTop,
-    // 踝部太细会让人台显得发飘，5cm 左右比较稳
-    radiusBottom: radiusTop * 0.5,
-  }))
-}
+// ────────────────────────────────────────────────────────────
+// 肉块
+// ────────────────────────────────────────────────────────────
 
 /**
- * 生成躯干截面。
- * 从胯部到颈部，胸/腰/胯三处直接由用户三围驱动 —— 这是「身型影响人偶」的核心。
- */
-export function buildTrunkRings(p: BodyProfile): BodyRing[] {
-  const bust = p.bustCm ?? p.weightKg * 1.55
-  const waist = p.waistCm ?? p.weightKg * 1.22
-  const hip = p.hipCm ?? p.weightKg * 1.62
-  const shoulder = p.shoulderCm ?? bust * 0.42
-
-  const L = BODY_LANDMARKS
-
-  return [
-    // 骨盆到底裆要「渐进收窄」，不能一步台阶下到底：
-    // 原来只有一环（0.45 -> 0.405 且半径陡降），白色材质下会露出一块方形台阶。
-    // 现在分三环收，末端很窄，正好藏在两条大腿之间。
-    { t: L.crotch - 0.085, rx: radiusFromCircumference(hip) * 0.42, rz: radiusFromCircumference(hip) * 0.34 },
-    { t: L.crotch - 0.035, rx: radiusFromCircumference(hip) * 0.78, rz: radiusFromCircumference(hip) * 0.62 },
-    { t: L.crotch, rx: radiusFromCircumference(hip) * 1.0, rz: radiusFromCircumference(hip) * 0.78 },
-    { t: L.hip, rx: radiusFromCircumference(hip), rz: radiusFromCircumference(hip) * 0.76 },
-    { t: (L.hip + L.waist) / 2, rx: radiusFromCircumference((hip + waist) / 2) * 0.96, rz: radiusFromCircumference(waist) * 0.79 },
-    { t: L.waist, rx: radiusFromCircumference(waist), rz: radiusFromCircumference(waist) * 0.80 },
-    { t: L.underBust, rx: radiusFromCircumference((waist + bust) / 2) * 1.02, rz: radiusFromCircumference(bust) * 0.74 },
-    { t: L.bust, rx: radiusFromCircumference(bust), rz: radiusFromCircumference(bust) * 0.72 },
-    { t: 0.78, rx: radiusFromCircumference(bust) * 1.05, rz: radiusFromCircumference(bust) * 0.79 },
-    { t: L.shoulder, rx: shoulder / 2, rz: radiusFromCircumference(bust) * 0.84 },
-    { t: L.neckBase, rx: (shoulder / 2) * 0.52, rz: 6.0 },
-    { t: L.chin, rx: 5.0, rz: 4.8 },
-  ]
-}
-
-/** 在任意归一化高度上线性插值出截面，供服装壳层采样使用 */
-export function sampleBodyRing(rings: BodyRing[], t: number): { rx: number; rz: number } {
-  if (t <= rings[0]!.t) return { rx: rings[0]!.rx, rz: rings[0]!.rz }
-  const last = rings[rings.length - 1]!
-  if (t >= last.t) return { rx: last.rx, rz: last.rz }
-
-  for (let i = 0; i < rings.length - 1; i++) {
-    const a = rings[i]!
-    const b = rings[i + 1]!
-    if (t >= a.t && t <= b.t) {
-      const k = (t - a.t) / (b.t - a.t || 1)
-      return { rx: a.rx + (b.rx - a.rx) * k, rz: a.rz + (b.rz - a.rz) * k }
-    }
-  }
-  return { rx: last.rx, rz: last.rz }
-}
-
-/**
- * 把一组截面放样成三维网格。
- * 这是人偶躯干与所有服装壳层共用的基础几何构造器 ——
- * 服装壳层 = 同一组截面 + 径向偏移，因此天然贴合身体（分层刚性贴合策略）。
- */
-export function loftGeometry(
-  rings: BodyRing[],
-  opts: {
-    totalHeightCm: number
-    scale?: number
-    radialSegments?: number
-    radialOffsetCm?: number
-    capBottom?: boolean
-    capTop?: boolean
-  },
-): THREE.BufferGeometry {
-  const {
-    totalHeightCm,
-    scale = 0.01,
-    radialSegments = 48,
-    radialOffsetCm = 0,
-    capBottom = true,
-    capTop = true,
-  } = opts
-
-  const rows = rings.length
-  const cols = radialSegments + 1 // 首尾重复一列，方便 UV 与法线
-  const positions: number[] = []
-  const uvs: number[] = []
-  const indices: number[] = []
-
-  for (let r = 0; r < rows; r++) {
-    const ring = rings[r]!
-    const y = ring.t * totalHeightCm * scale
-    for (let c = 0; c < cols; c++) {
-      const theta = (c / radialSegments) * Math.PI * 2
-      const rx = ring.rx + radialOffsetCm
-      const rz = ring.rz + radialOffsetCm
-      positions.push(Math.cos(theta) * rx * scale, y, Math.sin(theta) * rz * scale)
-      uvs.push(c / radialSegments, r / (rows - 1))
-    }
-  }
-
-  const rowIndex = (r: number, c: number) => r * cols + c
-
-  for (let r = 0; r < rows - 1; r++) {
-    for (let c = 0; c < radialSegments; c++) {
-      const a = rowIndex(r, c)
-      const b = rowIndex(r, c + 1)
-      const cc = rowIndex(r + 1, c + 1)
-      const d = rowIndex(r + 1, c)
-      indices.push(a, d, b, b, d, cc)
-    }
-  }
-
-  // 端盖
-  const addCap = (ringIdx: number, flip: boolean) => {
-    const ring = rings[ringIdx]!
-    const y = ring.t * totalHeightCm * scale
-    const centerIdx = positions.length / 3
-    positions.push(0, y, 0)
-    uvs.push(0.5, 0.5)
-    for (let c = 0; c < radialSegments; c++) {
-      const a = rowIndex(ringIdx, c)
-      const b = rowIndex(ringIdx, c + 1)
-      if (flip) indices.push(centerIdx, b, a)
-      else indices.push(centerIdx, a, b)
-    }
-  }
-  if (capBottom) addCap(0, false)
-  if (capTop) addCap(rows - 1, true)
-
-  const geometry = new THREE.BufferGeometry()
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
-  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2))
-  geometry.setIndex(indices)
-  geometry.computeVertexNormals()
-  return geometry
-}
-
-/**
- * 人台材质：白色哑光树脂（白模）。
+ * 由骨架生成肉块。
  *
- * 为什么从拟真肤色改为白模：
- *   程序化几何做不出可信的人体细节（五官、肌肉、皮肤质感），
- *   而「肤色 + 无五官」会正好落进恐怖谷 —— 观众本能地拿它跟真人比，
- *   然后觉得丑且诡异。
- *   白模是展示业界的既定语言：服装店里的人台本来就不像人。
- *   它主动放弃拟真，因此不会被拿来跟真人比较，丑的问题从根上消失。
- *
- * clearcoat 给一点树脂光泽，让白色形体在棚灯下有层次，不至于死白一片。
+ * 肌肉的做法：每个肢体段先放一根**变径胶囊**作为核心，
+ * 再在肌肉隆起处加一颗球 —— 平滑并集会自动把它揉成一个鼓包，
+ * 于是肱二头肌与小腿肚就出来了，不需要手工雕网格。
  */
+function buildBlobs(s: BodySkeleton): SdfBlob[] {
+  const blobs: SdfBlob[] = []
+  const male = s.gender === 'male'
+  const span = s.shoulderY - s.hipY
+
+  // ── 躯干：沿脊柱扫掠的变截面体 ──
+  // 一个图元搞定，截面在 胯 → 腰 → 胸 → 肩 之间**连续**变化。
+  // 早先用三个独立椭球拼，竖向不重叠，中间塌出了夸张的蜂腰。
+  blobs.push({
+    kind: 'loft',
+    stations: [
+      // 骨盆到底裆必须缓缓收：收得急就会在胯下留一圈「裙边」
+      { y: s.hipY - span * 0.2, w: s.hip.w * 0.3, d: s.hip.d * 0.3 },
+      { y: s.hipY - span * 0.12, w: s.hip.w * 0.62, d: s.hip.d * 0.58 },
+      { y: s.hipY - span * 0.05, w: s.hip.w * 0.92, d: s.hip.d * 0.88 },
+      { y: s.hipY, w: s.hip.w, d: s.hip.d },
+      { y: s.waistY, w: s.waist.w, d: s.waist.d },
+      {
+        y: s.chestY,
+        // 男性：胸廓更宽、更平；女性：胸量用「更饱满的截面深度」表达。
+        // 刻意不加两颗球 —— 那会变成两个突兀的疙瘩，作为人台很不体面。
+        w: s.chest.w * (male ? 1.08 : 0.98),
+        d: s.chest.d * (male ? 1.0 : 1.24),
+      },
+      // 肩部要一直保持够宽，让手臂根部落在它里面 ——
+      // 否则肩头会鼓出一个独立的包，像扛了两颗球
+      { y: s.shoulderY - span * 0.02, w: s.shoulderHalf * 0.95, d: s.chest.d * 0.9 },
+      // 斜方肌收口，让颈部平滑接上肩
+      { y: s.shoulderY + span * 0.05, w: s.neckR * 1.5, d: s.neckR * 1.4 },
+    ],
+  })
+
+  // ── 臀：向后隆起，女性更明显 ──
+  const buttR = s.hip.w * (male ? 0.4 : 0.44)
+  for (const side of [-1, 1] as const) {
+    blobs.push({
+      kind: 'sphere',
+      c: [side * s.hip.w * 0.38, s.hipY - span * 0.03, -s.hip.d * (male ? 0.58 : 0.64)],
+      r: buttR,
+    })
+  }
+
+  // ── 颈 ──
+  const neckTop = s.chinY
+  blobs.push({
+    kind: 'capsule',
+    a: [0, s.shoulderY - 0.01, 0],
+    b: [0, neckTop, 0.006],
+    r: s.neckR,
+  })
+
+  // ── 头：颅 + 下颌两段椭球，平滑并集后形成蛋形人台头 ──
+  const headC = s.chinY + s.head.h * 0.52
+  blobs.push({
+    kind: 'ellipsoid',
+    c: [0, headC + s.head.h * 0.1, 0],
+    r: [s.head.w * 0.52, s.head.h * 0.44, s.head.d * 0.55],
+  })
+  blobs.push({
+    kind: 'ellipsoid',
+    c: [0, s.chinY + s.head.h * 0.2, s.head.d * 0.06],
+    r: [s.head.w * 0.42, s.head.h * 0.26, s.head.d * 0.46],
+  })
+
+  // ── 四肢 ──
+  for (const arm of s.arms) {
+    blobs.push({ kind: 'roundcone', a: arm.root, b: arm.mid, r1: arm.rRoot, r2: arm.rMid })
+    blobs.push({ kind: 'roundcone', a: arm.mid, b: arm.end, r1: arm.rMid, r2: arm.rEnd })
+    // 肱二头肌
+    const bx = arm.root[0] + (arm.mid[0] - arm.root[0]) * 0.45
+    const by = arm.root[1] + (arm.mid[1] - arm.root[1]) * 0.45
+    const bz = arm.root[2] + (arm.mid[2] - arm.root[2]) * 0.45
+    blobs.push({ kind: 'sphere', c: [bx, by, bz], r: arm.rBulge })
+    // 手
+    blobs.push({
+      kind: 'ellipsoid',
+      c: [arm.end[0], arm.end[1] - arm.rEnd * 1.5, arm.end[2]],
+      r: [arm.rEnd * 1.15, arm.rEnd * 2.1, arm.rEnd * 0.72],
+    })
+  }
+
+  for (const leg of s.legs) {
+    blobs.push({ kind: 'roundcone', a: leg.root, b: leg.mid, r1: leg.rRoot, r2: leg.rMid })
+    blobs.push({ kind: 'roundcone', a: leg.mid, b: leg.end, r1: leg.rMid, r2: leg.rEnd })
+    // 小腿肚：偏上
+    const cx2 = leg.mid[0] + (leg.end[0] - leg.mid[0]) * 0.28
+    const cy2 = leg.mid[1] + (leg.end[1] - leg.mid[1]) * 0.28
+    const cz2 = leg.mid[2] + (leg.end[2] - leg.mid[2]) * 0.28 - leg.rBulge * 0.25
+    blobs.push({ kind: 'sphere', c: [cx2, cy2, cz2], r: leg.rBulge })
+    // 脚：沿 +Z 伸出的圆棒，底面落在 y=0 附近，读起来像鞋楦
+    const soleR = s.ankleR * 0.95
+    blobs.push({
+      kind: 'capsule',
+      a: [leg.end[0], soleR, leg.end[2] - soleR * 0.6],
+      b: [leg.end[0], soleR, leg.end[2] + s.height * 0.11],
+      r: soleR,
+    })
+  }
+
+  return blobs
+}
+
+// ────────────────────────────────────────────────────────────
+// 身体模型
+// ────────────────────────────────────────────────────────────
+
+export interface BodyModel {
+  profile: BodyProfile
+  skeleton: BodySkeleton
+  blobs: SdfBlob[]
+  /** 隐式曲面求值 */
+  sdf: (x: number, y: number, z: number) => number
+  /**
+   * 从体内一点沿方向找到表面距离（米）。
+   * 超出 maxDist 仍未命中则返回 null —— 调用方据此回退到解析半径。
+   * 这是服装贴合肉体的关键：不再假设身体是椭圆环，而是直接问 SDF。
+   */
+  surfaceRadius(
+    ox: number, oy: number, oz: number,
+    dx: number, dy: number, dz: number,
+    maxDist: number,
+  ): number | null
+  bounds: { min: Vec3; max: Vec3 }
+}
+
+export function createBodyModel(profile: BodyProfile): BodyModel {
+  const skeleton = buildSkeleton(profile)
+  const blobs = buildBlobs(skeleton)
+  // 平滑系数：偏小则肉块交界处会露出硬棱，偏大则会把交界「吹胖」——
+  // 胯部那圈裙边感就是吹胖造成的，所以取偏小的 0.02。
+  const sdf = compileSdf(blobs, 0.02)
+
+  const surfaceRadius: BodyModel['surfaceRadius'] = (ox, oy, oz, dx, dy, dz, maxDist) => {
+    if (sdf(ox, oy, oz) > 0) return null // 起点已在体外，无法内往外找
+    const steps = 56
+    const dt = maxDist / steps
+    let prevT = 0
+    for (let i = 1; i <= steps; i++) {
+      const t = i * dt
+      if (sdf(ox + dx * t, oy + dy * t, oz + dz * t) >= 0) {
+        // 命中，二分细化到亚毫米
+        let lo = prevT
+        let hi = t
+        for (let k = 0; k < 12; k++) {
+          const mid = (lo + hi) / 2
+          if (sdf(ox + dx * mid, oy + dy * mid, oz + dz * mid) < 0) lo = mid
+          else hi = mid
+        }
+        return (lo + hi) / 2
+      }
+      prevT = t
+    }
+    return null
+  }
+
+  return { profile, skeleton, blobs, sdf, surfaceRadius, bounds: blobsBounds(blobs) }
+}
+
+// ────────────────────────────────────────────────────────────
+// 网格
+// ────────────────────────────────────────────────────────────
+
 function mannequinMaterial(): THREE.MeshPhysicalMaterial {
   return new THREE.MeshPhysicalMaterial({
-    // 略偏灰而非纯白：纯白会和白衬衫（0xf2f2f0）糊成一片。
-    // 真正区分两者的是质感 —— 人台是亮面树脂，衣服是哑光布料。
     color: 0xece8e3,
     roughness: 0.34,
     metalness: 0,
@@ -285,114 +377,127 @@ function mannequinMaterial(): THREE.MeshPhysicalMaterial {
   })
 }
 
-/**
- * 头颈一体成型（LatheGeometry 旋转体）。
- *
- * 原来用「球 + 圆柱」拼，接缝在白色材质下会非常明显。
- * 旋转体可以画出一条连续、优雅的侧面轮廓 —— 这是人台最该做好的地方。
- */
-function buildHeadAndNeck(profile: BodyProfile, mat: THREE.Material): THREE.Mesh {
-  const unit = profile.heightCm * 0.01
-  const k = unit / 1.68 // 以 1.68m 的人台为基准等比缩放
-  // 剖面点：[半径(米), 相对颈根的高度(米)]
-  const section: Array<[number, number]> = [
-    [0.0, 0.0],
-    [0.052, 0.0],
-    [0.049, 0.018],
-    [0.044, 0.04], // 颈部最细
-    [0.048, 0.058],
-    [0.061, 0.074], // 下颌
-    [0.072, 0.098],
-    [0.078, 0.13], // 最宽
-    [0.074, 0.164],
-    [0.06, 0.198],
-    [0.035, 0.222],
-    [0.0, 0.232], // 头顶
-  ]
-  const points = section.map(([r, y]) => new THREE.Vector2(r * k, y * k))
-  const geometry = new THREE.LatheGeometry(points, 44)
-  geometry.translate(0, BODY_LANDMARKS.neckBase * unit, 0)
-  geometry.computeVertexNormals()
-  const mesh = new THREE.Mesh(geometry, mat)
-  mesh.name = 'head'
-  return mesh
-}
+export type MannequinQuality = 'preview' | 'final'
 
 /**
- * 生成完整人台。
- *
- * 结构要点：四肢是圆柱，直接插进躯干会在白色材质下露出平截面接缝，
- * 所以在每个关节处补一颗球做过渡，并在肢体末端补手脚 ——
- * 这是把人台从「几根管子拼起来」变成「一件雕塑」的关键。
+ * 生成人台网格。
+ * preview 用更粗的体素 —— 拖滑杆时实时重建靠它，
+ * 松手后再用 final 精度重算。
  */
-export function buildMannequin(profile: BodyProfile): THREE.Group {
+export function buildMannequin(model: BodyModel, quality: MannequinQuality = 'final'): THREE.Group {
   const group = new THREE.Group()
-  const scale = 0.01
-  const H = profile.heightCm
-  const rings = buildTrunkRings(profile)
-  const mat = mannequinMaterial()
+  const { bounds } = model
+  const margin = 0.03
+  const voxel = (model.skeleton.height / 152) * (quality === 'preview' ? 2.2 : 1)
 
-  // 躯干：径向分段提到 64，白色表面上分段不足会看出棱面
-  const trunk = new THREE.Mesh(
-    loftGeometry(rings, { totalHeightCm: H, scale, radialSegments: 64 }),
-    mat,
-  )
-  trunk.name = 'trunk'
-  group.add(trunk)
+  const geometry = polygonize(model.sdf, {
+    bounds: {
+      min: [bounds.min[0] - margin, bounds.min[1] - margin, bounds.min[2] - margin],
+      max: [bounds.max[0] + margin, bounds.max[1] + margin, bounds.max[2] + margin],
+    },
+    voxel,
+  })
 
-  // ── 腿 ──
-  for (const leg of buildLegSpecs(profile)) {
-    const geo = new THREE.CylinderGeometry(leg.radiusTop, leg.radiusBottom, leg.length, 32, 1, false)
-    geo.translate(0, -leg.length / 2, 0)
-    const mesh = new THREE.Mesh(geo, mat)
-    mesh.position.set(leg.origin.x, leg.origin.y, leg.origin.z)
-    mesh.rotation.z = leg.rotationZ
-    mesh.name = leg.side < 0 ? 'leg-left' : 'leg-right'
-    group.add(mesh)
-
-    // 髋关节球：把「圆柱硬插进躯干」变成自然过渡
-    const hipBall = new THREE.Mesh(new THREE.SphereGeometry(leg.radiusTop * 1.12, 30, 22), mat)
-    hipBall.position.set(leg.origin.x, leg.origin.y, 0)
-    hipBall.name = `${mesh.name}-joint`
-    group.add(hipBall)
-
-    // 脚：向前(+Z)伸出的扁椭球，避免腿以平截面收尾
-    const ankle = limbPointAt(leg, leg.length)
-    const foot = new THREE.Mesh(new THREE.SphereGeometry(leg.radiusBottom * 1.5, 26, 18), mat)
-    foot.scale.set(1.0, 0.5, 1.9)
-    foot.position.set(ankle.x, ankle.y + leg.radiusBottom * 0.35, ankle.z + leg.radiusBottom * 1.15)
-    foot.name = `${mesh.name}-foot`
-    group.add(foot)
-  }
-
-  // ── 臂 ──
-  for (const arm of buildArmSpecs(profile)) {
-    const geo = new THREE.CylinderGeometry(arm.radiusTop, arm.radiusBottom, arm.length, 28, 1, false)
-    geo.translate(0, -arm.length / 2, 0)
-    const mesh = new THREE.Mesh(geo, mat)
-    mesh.position.set(arm.origin.x, arm.origin.y, arm.origin.z)
-    mesh.rotation.z = arm.rotationZ
-    mesh.name = arm.side < 0 ? 'arm-left' : 'arm-right'
-    group.add(mesh)
-
-    // 肩关节球：藏住圆柱顶端的平截面，做出圆润的肩头
-    const shoulderBall = new THREE.Mesh(new THREE.SphereGeometry(arm.radiusTop * 1.28, 30, 22), mat)
-    shoulderBall.position.set(arm.origin.x, arm.origin.y - arm.radiusTop * 0.15, 0)
-    shoulderBall.name = `${mesh.name}-joint`
-    group.add(shoulderBall)
-
-    // 手：扁长的椭球，比平截面收尾自然得多
-    const wrist = limbPointAt(arm, arm.length)
-    const hand = new THREE.Mesh(new THREE.SphereGeometry(arm.radiusBottom * 1.45, 26, 18), mat)
-    hand.scale.set(0.85, 1.6, 0.6)
-    hand.position.set(wrist.x, wrist.y - arm.radiusBottom * 0.9, wrist.z)
-    hand.rotation.z = arm.rotationZ
-    hand.name = `${mesh.name}-hand`
-    group.add(hand)
-  }
-
-  // ── 头颈 ──
-  group.add(buildHeadAndNeck(profile, mat))
-
+  const mesh = new THREE.Mesh(geometry, mannequinMaterial())
+  mesh.name = 'body'
+  group.add(mesh)
   return group
 }
+
+// ────────────────────────────────────────────────────────────
+// 肢体描述（供服装使用）
+// ────────────────────────────────────────────────────────────
+
+/**
+ * 肢体参数。
+ * 服装的袖子/裤腿沿用它定位轴向，再向 SDF 求表面半径做贴合。
+ *
+ * 注意存的是**分段路径长度**（root→mid、mid→end），不是直线距离 ——
+ * 手臂有肘部转折，用直线距离做插值会让袖子在中段跑偏。
+ */
+export interface LimbSpec {
+  side: -1 | 1
+  origin: { x: number; y: number; z: number }
+  mid: { x: number; y: number; z: number }
+  end: { x: number; y: number; z: number }
+  /** root -> mid 的长度 */
+  segLen1: number
+  /** mid -> end 的长度 */
+  segLen2: number
+  /** 路径总长 */
+  length: number
+  radiusTop: number
+  radiusMid: number
+  radiusBottom: number
+}
+
+function vec(v: Vec3): { x: number; y: number; z: number } {
+  return { x: v[0], y: v[1], z: v[2] }
+}
+
+function segLength(a: { x: number; y: number; z: number }, b: { x: number; y: number; z: number }): number {
+  const dx = b.x - a.x
+  const dy = b.y - a.y
+  const dz = b.z - a.z
+  return Math.sqrt(dx * dx + dy * dy + dz * dz)
+}
+
+function makeLimbSpec(chain: LimbChain, rotationZ: number): LimbSpec {
+  const origin = vec(chain.root)
+  const mid = vec(chain.mid)
+  const end = vec(chain.end)
+  const segLen1 = segLength(origin, mid)
+  const segLen2 = segLength(mid, end)
+  return {
+    side: chain.side,
+    origin, mid, end,
+    segLen1,
+    segLen2,
+    length: segLen1 + segLen2,
+    // 表面半径取略大于骨架半径：SDF 平滑并集会把形体略微「鼓」出来，
+    // 取小了袖子会切进手臂
+    radiusTop: chain.rRoot * 1.06,
+    radiusMid: chain.rMid * 1.1,
+    radiusBottom: chain.rEnd * 1.08,
+  }
+}
+
+export function buildArmSpecs(model: BodyModel): LimbSpec[] {
+  return model.skeleton.arms.map((arm) => makeLimbSpec(arm, arm.side * 0.06))
+}
+
+export function buildLegSpecs(model: BodyModel): LimbSpec[] {
+  return model.skeleton.legs.map((leg) => makeLimbSpec(leg, 0))
+}
+
+/**
+ * 沿肢体路径、距根部 d 米处的中心点。
+ * d 允许为负或超过总长 —— 用于裤腰向上外推、袖口略微超出腕部。
+ */
+export function limbPointAt(limb: LimbSpec, d: number): { x: number; y: number; z: number } {
+  if (d <= limb.segLen1) {
+    const t = limb.segLen1 > 1e-9 ? d / limb.segLen1 : 0
+    return {
+      x: limb.origin.x + (limb.mid.x - limb.origin.x) * t,
+      y: limb.origin.y + (limb.mid.y - limb.origin.y) * t,
+      z: limb.origin.z + (limb.mid.z - limb.origin.z) * t,
+    }
+  }
+  const t = limb.segLen2 > 1e-9 ? (d - limb.segLen1) / limb.segLen2 : 0
+  return {
+    x: limb.mid.x + (limb.end.x - limb.mid.x) * t,
+    y: limb.mid.y + (limb.end.y - limb.mid.y) * t,
+    z: limb.mid.z + (limb.end.z - limb.mid.z) * t,
+  }
+}
+
+/** 沿肢体路径的半径（分段线性，含中关节） */
+export function limbRadiusAt(limb: LimbSpec, d: number): number {
+  if (d <= limb.segLen1) {
+    const t = limb.segLen1 > 1e-9 ? d / limb.segLen1 : 0
+    return limb.radiusTop + (limb.radiusMid - limb.radiusTop) * t
+  }
+  const t = limb.segLen2 > 1e-9 ? (d - limb.segLen1) / limb.segLen2 : 0
+  return limb.radiusMid + (limb.radiusBottom - limb.radiusMid) * t
+}
+

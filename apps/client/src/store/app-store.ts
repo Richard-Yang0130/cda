@@ -7,7 +7,7 @@
  *   3. 后续要换成 Pinia 或接后端，只需把这几个函数改成 action，页面无需改
  */
 import { reactive } from 'vue'
-import { defaultBodyProfile, mockWardrobe, type BodyProfile, type WardrobeItem } from '@cda/core'
+import { defaultBodyProfile, mockWardrobe, type WardrobeItem } from '@cda/core'
 
 let seq = 0
 
@@ -15,7 +15,7 @@ export const store = reactive({
   /** 我的衣橱 */
   wardrobe: [...mockWardrobe] as WardrobeItem[],
   /** 身型数据，3D 试穿台与穿搭建议共用 */
-  body: { ...defaultBodyProfile } as BodyProfile,
+  body: defaultBodyProfile('female'),
   /**
    * 从「穿搭建议」页点「在 3D 人偶上试穿」时写入，
    * 3D 试穿台 onShow 时读取并清空 —— 这是 uni-app 下最省事的跨页传参方式。

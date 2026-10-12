@@ -13,7 +13,13 @@
  */
 import * as THREE from 'three'
 import type { BodyProfile, WearMode } from '@cda/core'
-import { buildMannequin } from './body'
+import { defaultBodyProfile } from '@cda/core'
+import {
+  buildMannequin,
+  createBodyModel,
+  type BodyModel,
+  type MannequinQuality,
+} from './body'
 import { createGarment, type Garment } from './garment'
 import type { CanvasLike, RendererLike, TryonPlatform } from './platform'
 
@@ -26,14 +32,7 @@ export interface TryonEngineOptions {
   bodyProfile?: BodyProfile
 }
 
-const DEFAULT_BODY: BodyProfile = {
-  heightCm: 168,
-  weightKg: 55,
-  bustCm: 86,
-  waistCm: 66,
-  hipCm: 92,
-  shoulderCm: 38,
-}
+const DEFAULT_BODY: BodyProfile = defaultBodyProfile('female')
 
 export class TryonEngine {
   private readonly platform: TryonPlatform
@@ -46,7 +45,11 @@ export class TryonEngine {
   private mannequin: THREE.Group | null = null
   /** 脚下假阴影。用程序化纹理而非 shadowMap，移动端更省 */
   private groundShadow: THREE.Mesh | null = null
-  private profile: BodyProfile
+  /**
+   * 身体模型（骨架 + 肉块 + SDF）。
+   * 服装要靠它求表面半径，所以必须留一份给 garment 用。
+   */
+  private model: BodyModel
   private readonly garments = new Map<string, Garment>()
 
   private frameHandle: number | null = null
@@ -69,7 +72,7 @@ export class TryonEngine {
     this.canvas = opts.canvas
     this.width = opts.width
     this.height = opts.height
-    this.profile = { ...DEFAULT_BODY, ...(opts.bodyProfile ?? {}) }
+    this.model = createBodyModel({ ...DEFAULT_BODY, ...(opts.bodyProfile ?? {}) })
 
     this.renderer = this.platform.createRenderer(this.canvas, { antialias: true, alpha: true })
     this.renderer.setPixelRatio(this.platform.getPixelRatio())
@@ -135,20 +138,23 @@ export class TryonEngine {
     this.scene.add(rim)
   }
 
-  /** 按当前身型重建人偶（身型改变时必须重建，因为几何是参数化生成的） */
-  private rebuildMannequin(): void {
+  /**
+   * 重建人台网格。
+   * preview 会显著提高体素边长 —— 拖动滑杆时用它保持跟手。
+   */
+  private rebuildMannequin(quality: MannequinQuality = 'final'): void {
     if (this.mannequin) {
       this.world.remove(this.mannequin)
       disposeObject(this.mannequin)
     }
-    this.mannequin = buildMannequin(this.profile)
+    this.mannequin = buildMannequin(this.model, quality)
     this.world.add(this.mannequin)
 
-    // 阴影贴着脚底（脚踝高度即为最低点），并随身高缩放
+    // 阴影贴在脚底，并随身高缩放
+    const H = this.model.skeleton.height
     if (this.groundShadow) {
-      const h = this.profile.heightCm * 0.01
-      const s = this.profile.heightCm / 168
-      this.groundShadow.position.y = 0.04 * h
+      const s = H / 1.68
+      this.groundShadow.position.y = 0.004
       this.groundShadow.scale.set(s, s, s)
     }
 
@@ -160,7 +166,7 @@ export class TryonEngine {
    * 距离由身高与相机垂直 FOV 反解得到，因此改变身高后取景依然合理。
    */
   private frameBody(): void {
-    const bodyHeight = this.profile.heightCm * 0.01
+    const bodyHeight = this.model.skeleton.height
     this.targetY = bodyHeight * 0.5
     const fovRad = (this.camera.fov * Math.PI) / 180
     // 留 18% 余量，避免头顶/脚底贴边
@@ -170,10 +176,15 @@ export class TryonEngine {
 
   // ------------------------------------------------------------ 身型
 
-  /** 更新身型数据。会重建人偶，并按其新体型重算所有已穿服装 */
-  setBodyProfile(profile: BodyProfile): void {
-    this.profile = { ...profile }
-    this.rebuildMannequin()
+  /**
+   * 更新身型数据。会重建身体模型、人台网格，并按其新体型重算所有已穿服装。
+   *
+   * quality='preview' 用于拖动滑杆的过程中：只降人台精度，
+   * 服装仍会重算（否则衣服会在拖动时脱离身体），但整体开销可控。
+   */
+  setBodyProfile(profile: BodyProfile, quality: MannequinQuality = 'final'): void {
+    this.model = createBodyModel(profile)
+    this.rebuildMannequin(quality)
     this.frameBody()
 
     // 服装几何依赖身体截面，身型变了必须重建
@@ -193,7 +204,7 @@ export class TryonEngine {
   }
 
   getBodyProfile(): BodyProfile {
-    return { ...this.profile }
+    return { ...this.model.profile }
   }
 
   // ------------------------------------------------------------ 服装
@@ -203,7 +214,7 @@ export class TryonEngine {
     const existing = this.garments.get(productId)
     if (existing) return existing
 
-    const garment = createGarment(this.profile, productId, colorHex)
+    const garment = createGarment(this.model, productId, colorHex)
     if (!garment) return null
 
     // 按 bodySlot 决定层级顺序，保证外套在外、内衣在里

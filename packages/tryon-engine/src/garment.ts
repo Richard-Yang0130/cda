@@ -12,8 +12,15 @@
  *   服装壳层只有几百个顶点，每次重算的开销可以忽略。
  */
 import * as THREE from 'three'
-import type { BodyProfile, BodySlot, WearMode } from '@cda/core'
-import { BODY_LANDMARKS, buildArmSpecs, buildLegSpecs, buildTrunkRings, limbPointAt, limbRadiusAt, sampleBodyRing } from './body'
+import type { BodySlot, WearMode } from '@cda/core'
+import {
+  buildArmSpecs,
+  buildLegSpecs,
+  limbPointAt,
+  limbRadiusAt,
+  type BodyModel,
+  type LimbSpec,
+} from './body'
 
 /** 一件单品在 3D 人偶上的挂载描述 */
 export interface GarmentSpec {
@@ -114,7 +121,7 @@ export class Garment {
   private _fastenerClosed: number
 
   constructor(
-    private readonly profile: BodyProfile,
+    private readonly model: BodyModel,
     spec: GarmentSpec,
   ) {
     this.spec = spec
@@ -181,24 +188,34 @@ export class Garment {
 
   /** 上装 / 外套 / 连衣裙：绕躯干的壳层 */
   private buildShell(group: THREE.Group): void {
-    const H = this.profile.heightCm
-    const scale = 0.01
-    const rings = buildTrunkRings(this.profile)
+    const H = this.model.skeleton.height
+    const off = this.spec.offsetCm * 0.01
     const segs = 48
-    const rows = 24
+    const rows = 26
 
     const positions: number[] = []
     const uvs: number[] = []
     const params: VertexParam[] = []
     const indices: number[] = []
+    const lastRadius = new Array<number>(segs + 1).fill(0.12)
 
     for (let r = 0; r <= rows; r++) {
       const t = this.spec.fromT + ((this.spec.toT - this.spec.fromT) * r) / rows
-      const { rx, rz } = sampleBodyRing(rings, t)
+      const y = t * H
       for (let c = 0; c <= segs; c++) {
         const theta = (c / segs) * Math.PI * 2
-        const off = this.spec.offsetCm * scale
-        positions.push(Math.cos(theta) * (rx * scale + off), t * H * scale, Math.sin(theta) * (rz * scale + off))
+        const dirX = Math.cos(theta)
+        const dirZ = Math.sin(theta)
+        // 从身体中轴向外打一条射线，取到真实表面距离。
+        // 这一步让衣服跟着胸、背、腰的真实起伏走，而不是套一个椭圆。
+        const hit = this.model.surfaceRadius(0, y, 0, dirX, 0, dirZ, 0.5)
+        // 射不到（例如该高度已越过肩线、轴点落在体外）就沿用上一行的半径，
+        // 否则会冒出一根尖刺
+        let base = hit
+        if (base === null) base = lastRadius[c]!
+        else lastRadius[c] = base
+        const rad = base + off
+        positions.push(dirX * rad, y, dirZ * rad)
         uvs.push(c / segs, r / rows)
         params.push({ t, theta })
       }
@@ -228,36 +245,39 @@ export class Garment {
     this.bases.push({ mesh, base: new Float32Array(positions), params })
   }
 
-  /** 下装：两条绕腿的管子（复用腿部 limb specs） */
+  /** 下装：两条绕腿的管子，半径向 SDF 求贴合 */
   private buildLegs(group: THREE.Group): void {
-    const H = this.profile.heightCm
-    const scale = 0.01
-    const off = this.spec.offsetCm * scale
+    const H = this.model.skeleton.height
+    const off = this.spec.offsetCm * 0.01
     const segs = 28
     const rows = 22
 
-    for (const leg of buildLegSpecs(this.profile)) {
+    for (const leg of buildLegSpecs(this.model)) {
       const positions: number[] = []
       const uvs: number[] = []
       const params: VertexParam[] = []
       const indices: number[] = []
 
+      // 裤腰略高于胯（d 为负 = 沿路径向上外推），裤脚到脚踝
+      const dTop = -0.055
+      const dBottom = leg.length * 0.985
+
       for (let r = 0; r <= rows; r++) {
         const k = r / rows
-        // 从裤腰(上) 到 裤脚(下)
-        const t = this.spec.toT - (this.spec.toT - this.spec.fromT) * k
-        const d = (BODY_LANDMARKS.hip - t) * H * scale
+        const d = dTop + (dBottom - dTop) * k
         const center = limbPointAt(leg, d)
-        // 裤腰处 d 为负（向上外推），会得到更宽的胯部；设下限避免过宽
-        const radius = Math.max(limbRadiusAt(leg, d), leg.radiusTop * 0.55) + off
+        const fallback = limbRadiusAt(leg, Math.max(0, d))
+        const t = center.y / H
 
         for (let c = 0; c <= segs; c++) {
           const theta = (c / segs) * Math.PI * 2
-          positions.push(
-            center.x + Math.cos(theta) * radius,
-            t * H * scale,
-            center.z + Math.sin(theta) * radius,
-          )
+          const dirX = Math.cos(theta)
+          const dirZ = Math.sin(theta)
+          // 上限取解析半径的 2 倍：超过说明射线穿到了另一条腿，
+          // 此时必须回退解析半径，否则一条裤腿会把整个骨盆包进去
+          const hit = this.model.surfaceRadius(center.x, center.y, center.z, dirX, 0, dirZ, fallback * 2)
+          const rad = (hit ?? fallback) + off
+          positions.push(center.x + dirX * rad, center.y, center.z + dirZ * rad)
           uvs.push(c / segs, k)
           params.push({ t, theta })
         }
@@ -291,20 +311,18 @@ export class Garment {
   /**
    * 袖子：绕手臂的管状壳层。
    *
-   * 关键点：手臂的位置、倾角、半径全部取自 body.ts 的 buildArmSpecs，
-   * 所以无论身型怎么调，袖子永远精确贴合手臂，不会「飘在空中」或穿模。
-   * 半径用 limbRadiusAt 沿臂长插值再加松量，得到自然的锥形袖。
+   * 手臂的走向取自骨架（有肘部转折），半径则向 SDF 求真实表面 ——
+   * 所以肱二头肌隆起处袖子会自然跟着鼓起来，而不是一根直筒。
    */
   private buildSleeves(group: THREE.Group, kind: 'short' | 'long'): void {
-    const H = this.profile.heightCm
-    const scale = 0.01
-    const off = this.spec.offsetCm * scale
+    const H = this.model.skeleton.height
+    const off = this.spec.offsetCm * 0.01
     const segs = 24
-    const rows = 16
+    const rows = 18
     // 短袖覆盖上臂约 1/3，长袖到手腕附近
-    const coverage = kind === 'long' ? 0.94 : 0.34
+    const coverage = kind === 'long' ? 0.95 : 0.36
 
-    for (const arm of buildArmSpecs(this.profile)) {
+    for (const arm of buildArmSpecs(this.model)) {
       const len = arm.length * coverage
       const positions: number[] = []
       const uvs: number[] = []
@@ -314,19 +332,19 @@ export class Garment {
       for (let r = 0; r <= rows; r++) {
         const k = r / rows
         // 起点略微上移，让袖山与躯干壳层重叠、接缝不露缝
-        const d = -0.012 + (len + 0.012) * k
+        const d = -0.014 + (len + 0.014) * k
         const center = limbPointAt(arm, d)
-        const radius = limbRadiusAt(arm, d) + off
+        const fallback = limbRadiusAt(arm, Math.max(0, d))
 
         for (let c = 0; c <= segs; c++) {
           const theta = (c / segs) * Math.PI * 2
-          positions.push(
-            center.x + Math.cos(theta) * radius,
-            center.y,
-            center.z + Math.sin(theta) * radius,
-          )
+          const dirX = Math.cos(theta)
+          const dirZ = Math.sin(theta)
+          const hit = this.model.surfaceRadius(center.x, center.y, center.z, dirX, 0, dirZ, fallback * 2.2)
+          const radius = (hit ?? fallback) + off
+          positions.push(center.x + dirX * radius, center.y, center.z + dirZ * radius)
           uvs.push(c / segs, k)
-          params.push({ t: center.y / (H * scale), theta })
+          params.push({ t: center.y / H, theta })
         }
       }
 
@@ -355,31 +373,33 @@ export class Garment {
     }
   }
 
-  /** 配饰：围在脖子/腰上的环带 */
+  /** 配饰：围在脖子/腰上的环带。半径同样向 SDF 求，贴合颈/腰的真实轮廓 */
   private buildBand(group: THREE.Group): void {
-    const H = this.profile.heightCm
-    const scale = 0.01
-    const rings = buildTrunkRings(this.profile)
+    const H = this.model.skeleton.height
+    const off = this.spec.offsetCm * 0.01
     const segs = 64
     const rows = 6
-    const off = this.spec.offsetCm * scale
     const positions: number[] = []
     const uvs: number[] = []
     const params: VertexParam[] = []
     const indices: number[] = []
+    const lastRadius = new Array<number>(segs + 1).fill(0.08)
 
     for (let r = 0; r <= rows; r++) {
       const t = this.spec.fromT + ((this.spec.toT - this.spec.fromT) * r) / rows
-      const { rx, rz } = sampleBodyRing(rings, t)
+      const y = t * H
       // 环带比身体略粗，形成蓬松的围巾感
       const bulge = r === 0 || r === rows ? 0 : Math.sin((r / rows) * Math.PI) * 0.012
       for (let c = 0; c <= segs; c++) {
         const theta = (c / segs) * Math.PI * 2
-        positions.push(
-          Math.cos(theta) * (rx * scale + off + bulge),
-          t * H * scale,
-          Math.sin(theta) * (rz * scale + off + bulge),
-        )
+        const dirX = Math.cos(theta)
+        const dirZ = Math.sin(theta)
+        const hit = this.model.surfaceRadius(0, y, 0, dirX, 0, dirZ, 0.5)
+        let base = hit
+        if (base === null) base = lastRadius[c]!
+        else lastRadius[c] = base
+        const rad = base + off + bulge
+        positions.push(dirX * rad, y, dirZ * rad)
         uvs.push(c / segs, r / rows)
         params.push({ t, theta })
       }
@@ -484,7 +504,7 @@ export class Garment {
 
     // --- 围起来：向颈部聚拢 ---
     if (mode === 'wrapped') {
-      const neckY = BODY_LANDMARKS.neckBase * this.profile.heightCm * 0.01
+      const neckY = this.model.skeleton.shoulderY
       dy += (neckY - by) * 0.75
       dx += bx * -0.1
       dz += bz * -0.1
@@ -492,7 +512,7 @@ export class Garment {
 
     // --- 系在腰上：下移到腰部并收紧 ---
     if (mode === 'tied') {
-      const waistY = BODY_LANDMARKS.waist * this.profile.heightCm * 0.01
+      const waistY = this.model.skeleton.waistY
       dy += (waistY - by) * 0.9
       dx += bx * -0.18
       dz += bz * -0.18
@@ -503,7 +523,7 @@ export class Garment {
 }
 
 /** 便捷工厂 */
-export function createGarment(profile: BodyProfile, productId: string, colorHex?: number): Garment | null {
+export function createGarment(model: BodyModel, productId: string, colorHex?: number): Garment | null {
   const reg = GARMENT_REGISTRY[productId]
   if (!reg) return null
   const spec: GarmentSpec = {
@@ -512,7 +532,7 @@ export function createGarment(profile: BodyProfile, productId: string, colorHex?
     ...reg,
     color: reg.color,
   }
-  const g = new Garment(profile, spec)
+  const g = new Garment(model, spec)
   if (colorHex !== undefined) g.setColor(colorHex)
   return g
 }

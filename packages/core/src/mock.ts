@@ -2,7 +2,7 @@
  * 本地假数据 —— demo 阶段不接后端，先用这里的静态数据跑通交互。
  * 后续接入真实 API 时，只需把这里替换为请求层，上层组件不用改。
  */
-import type { Product, WardrobeItem, BodyProfile } from './types'
+import type { Product, WardrobeItem, BodyProfile, Gender } from './types'
 
 export const mockProducts: Product[] = [
   {
@@ -59,14 +59,49 @@ export const mockProducts: Product[] = [
   },
 ]
 
-/** 默认身型（演示用） */
-export const defaultBodyProfile: BodyProfile = {
-  heightCm: 168,
-  weightKg: 55,
-  bustCm: 86,
-  waistCm: 66,
-  hipCm: 92,
-  shoulderCm: 38,
+/**
+ * 性别预设。
+ *
+ * 数值取自成年人的常见比例（男性肩宽腰窄、女性腰臀比更明显），
+ * 用户在此基础上微调。切换性别时会套用对应预设。
+ */
+export function defaultBodyProfile(gender: Gender = 'female'): BodyProfile {
+  if (gender === 'male') {
+    return {
+      gender: 'male',
+      heightCm: 176,
+      weightKg: 70,
+      chestCm: 96,
+      waistCm: 82,
+      hipCm: 95,
+      upperArmCircCm: 32,
+      thighCircCm: 56,
+      shoulderWidthCm: 45,
+      torsoLengthCm: 47,
+      neckLengthCm: 11,
+      upperArmCm: 33,
+      forearmCm: 27,
+      thighCm: 47,
+      calfCm: 43,
+    }
+  }
+  return {
+    gender: 'female',
+    heightCm: 165,
+    weightKg: 54,
+    chestCm: 86,
+    waistCm: 67,
+    hipCm: 92,
+    upperArmCircCm: 26,
+    thighCircCm: 52,
+    shoulderWidthCm: 38,
+    torsoLengthCm: 43,
+    neckLengthCm: 9,
+    upperArmCm: 29,
+    forearmCm: 23,
+    thighCm: 43,
+    calfCm: 39,
+  }
 }
 
 /** 用户衣橱（演示用） */

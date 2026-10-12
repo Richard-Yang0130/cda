@@ -45,21 +45,40 @@
         <text class="card-note">拖动人偶可旋转</text>
       </view>
 
-      <view v-for="m in measurements" :key="m.key" class="slider-row">
-        <text class="slider-label">{{ m.label }}</text>
-        <slider
-          class="slider"
-          :value="m.value"
-          :min="m.min"
-          :max="m.max"
-          :step="1"
-          activeColor="#1a1a1a"
-          block-color="#1a1a1a"
-          :block-size="16"
-          @changing="(e: any) => onMeasureChange(m.key, e.detail.value)"
-          @change="(e: any) => onMeasureChange(m.key, e.detail.value)"
-        />
-        <text class="slider-value">{{ m.value }}{{ m.unit }}</text>
+      <view class="gender-row">
+        <view
+          v-for="g in genders"
+          :key="g.value"
+          class="gender-chip"
+          :class="{ active: body.gender === g.value }"
+          @click="setGender(g.value)"
+        >
+          <text>{{ g.label }}</text>
+        </view>
+      </view>
+
+      <view v-for="group in measureGroups" :key="group.title" class="measure-group">
+        <text class="group-title">{{ group.title }}</text>
+        <view v-for="m in group.fields" :key="m.key" class="slider-row">
+          <text class="slider-label">{{ m.label }}</text>
+          <slider
+            class="slider"
+            :value="body[m.key]"
+            :min="m.min"
+            :max="m.max"
+            :step="1"
+            activeColor="#1a1a1a"
+            block-color="#1a1a1a"
+            :block-size="16"
+            @changing="(e: any) => onMeasureChange(m.key, e.detail.value, 'changing')"
+            @change="(e: any) => onMeasureChange(m.key, e.detail.value, 'change')"
+          />
+          <text class="slider-value">{{ body[m.key] }}{{ m.unit }}</text>
+        </view>
+      </view>
+
+      <view class="normalize-hint">
+        <text>各段相加 {{ segmentSum }}cm · 身高 {{ body.heightCm }}cm · 引擎会按比例归一</text>
       </view>
     </view>
 
@@ -148,9 +167,9 @@
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, nextTick, ref, computed } from 'vue'
+import { onBeforeUnmount, onMounted, nextTick, ref, reactive, computed } from 'vue'
 import { onShow } from '@dcloudio/uni-app'
-import { findProduct, CATEGORY_LABEL, type Category, type WearMode } from '@cda/core'
+import { findProduct, defaultBodyProfile, CATEGORY_LABEL, type Category, type WearMode } from '@cda/core'
 import { TryonEngine, createH5Platform, WEAR_MODE_LABEL, GARMENT_REGISTRY } from '@cda/tryon-engine'
 import { mountStage, type StageHost } from '@/platform/stage'
 import { store } from '@/store/app-store'
@@ -162,14 +181,73 @@ let stage: StageHost | null = null
 
 const stageHint = ref('按住可旋转人偶')
 
-/** 身型滑杆配置 */
-const measurements = ref([
-  { key: 'heightCm', label: '身高', value: 168, min: 145, max: 195, unit: 'cm' },
-  { key: 'weightKg', label: '体重', value: 55, min: 35, max: 110, unit: 'kg' },
-  { key: 'bustCm', label: '胸围', value: 86, min: 68, max: 120, unit: 'cm' },
-  { key: 'waistCm', label: '腰围', value: 66, min: 50, max: 110, unit: 'cm' },
-  { key: 'hipCm', label: '臀围', value: 92, min: 72, max: 130, unit: 'cm' },
-])
+/** 身型数据（与 store 共用同一份对象，改动会同步到穿搭建议页） */
+const body = reactive({ ...store.body })
+
+/** 滑杆分组配置。key 直接对应 BodyProfile 的数字字段 */
+type NumericKey =
+  | 'heightCm' | 'weightKg' | 'shoulderWidthCm'
+  | 'chestCm' | 'waistCm' | 'hipCm' | 'upperArmCircCm' | 'thighCircCm'
+  | 'torsoLengthCm' | 'neckLengthCm' | 'upperArmCm' | 'forearmCm' | 'thighCm' | 'calfCm'
+
+interface MeasureField {
+  key: NumericKey
+  label: string
+  unit: string
+  min: number
+  max: number
+}
+
+const measureGroups: Array<{ title: string; fields: MeasureField[] }> = [
+  {
+    title: '基础',
+    fields: [
+      { key: 'heightCm', label: '身高', unit: 'cm', min: 145, max: 205 },
+      { key: 'weightKg', label: '体重', unit: 'kg', min: 35, max: 130 },
+      { key: 'shoulderWidthCm', label: '肩宽', unit: 'cm', min: 32, max: 56 },
+    ],
+  },
+  {
+    title: '围度',
+    fields: [
+      { key: 'chestCm', label: '胸围', unit: 'cm', min: 68, max: 130 },
+      { key: 'waistCm', label: '腰围', unit: 'cm', min: 50, max: 130 },
+      { key: 'hipCm', label: '臀围', unit: 'cm', min: 72, max: 140 },
+      { key: 'upperArmCircCm', label: '大臂围', unit: 'cm', min: 20, max: 45 },
+      { key: 'thighCircCm', label: '大腿围', unit: 'cm', min: 38, max: 80 },
+    ],
+  },
+  {
+    title: '长度',
+    fields: [
+      { key: 'torsoLengthCm', label: '上身长', unit: 'cm', min: 34, max: 62 },
+      { key: 'neckLengthCm', label: '颈长', unit: 'cm', min: 5, max: 18 },
+      { key: 'upperArmCm', label: '大臂长', unit: 'cm', min: 22, max: 42 },
+      { key: 'forearmCm', label: '小臂长', unit: 'cm', min: 18, max: 34 },
+      { key: 'thighCm', label: '大腿长', unit: 'cm', min: 34, max: 60 },
+      { key: 'calfCm', label: '小腿长', unit: 'cm', min: 28, max: 52 },
+    ],
+  },
+]
+
+const genders = [
+  { value: 'female' as const, label: '女性' },
+  { value: 'male' as const, label: '男性' },
+]
+
+/**
+ * 各分段之和 vs 身高。
+ * 用户填的数据常常不自洽，引擎会自动按比例归一 —— 这里把它显示出来，
+ * 避免用户以为是自己填错了。
+ */
+const segmentSum = computed(() => {
+  const headApprox = body.heightCm * 0.13
+  const ankleApprox = body.heightCm * 0.045
+  return Math.round(
+    headApprox + ankleApprox +
+    body.calfCm + body.thighCm + body.torsoLengthCm + body.neckLengthCm,
+  )
+})
 
 const worn = ref<string[]>([])
 const selectedGarment = ref<string | null>(null)
@@ -281,27 +359,51 @@ function applyPoseFromQuery() {
 }
 
 function currentProfile() {
-  const get = (k: string) => measurements.value.find((m) => m.key === k)?.value ?? 0
-  return {
-    heightCm: get('heightCm'),
-    weightKg: get('weightKg'),
-    bustCm: get('bustCm'),
-    waistCm: get('waistCm'),
-    hipCm: get('hipCm'),
-    shoulderCm: Math.round(get('bustCm') * 0.42),
-  }
+  // body 已经是完整 BodyProfile，直接浅拷贝给引擎
+  return { ...body }
 }
 
 // ───────────────────────────── 身型
 
-function onMeasureChange(key: string, value: number) {
-  const m = measurements.value.find((x) => x.key === key)
-  if (!m) return
-  m.value = value
-  const profile = currentProfile()
-  engine?.setBodyProfile(profile)
-  // 同步到 store，让穿搭建议等页面拿到同一份身型
-  Object.assign(store.body, profile)
+/**
+ * 拖动过程中的重算合并到下一帧。
+ * 每收到一次 changing 就重建一次会拖死主线程 —— 人体网格是多边形化出来的，
+ * 单次重建几十毫秒，必须限流。
+ */
+let previewScheduled = false
+
+function schedulePreview() {
+  if (previewScheduled) return
+  previewScheduled = true
+  const run = () => {
+    previewScheduled = false
+    engine?.setBodyProfile({ ...body }, 'preview')
+  }
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run)
+  else setTimeout(run, 16)
+}
+
+/**
+ * @param phase 'changing' = 拖动中（低精度预览）；'change' = 松手（全精度重建）
+ */
+function onMeasureChange(key: string, value: number, phase: 'changing' | 'change' = 'change') {
+  const target = body as unknown as Record<string, number>
+  target[key] = value
+  Object.assign(store.body, body)
+
+  if (phase === 'changing') {
+    schedulePreview()
+    return
+  }
+  engine?.setBodyProfile({ ...body }, 'final')
+}
+
+/** 切换性别：套用对应预设并全精度重建 */
+function setGender(gender: 'male' | 'female') {
+  if (body.gender === gender) return
+  Object.assign(body, defaultBodyProfile(gender))
+  Object.assign(store.body, body)
+  engine?.setBodyProfile({ ...body }, 'final')
 }
 
 // ───────────────────────────── 穿脱
@@ -619,10 +721,56 @@ function onItemClick(item: { productId: string }) {
 }
 
 /* ---------- 滑杆 ---------- */
+.gender-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.gender-chip {
+  flex: 1;
+  height: 36px;
+  border-radius: 10px;
+  background: #f2f2f2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.gender-chip text {
+  font-size: 13px;
+  color: #555;
+}
+.gender-chip.active {
+  background: #1a1a1a;
+}
+.gender-chip.active text {
+  color: #ffffff;
+}
+
+.measure-group {
+  margin-bottom: 10px;
+}
+.group-title {
+  display: block;
+  font-size: 11px;
+  color: #a0a0a0;
+  letter-spacing: 1px;
+  margin: 6px 0 4px;
+}
+.normalize-hint {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid #f2f2f2;
+}
+.normalize-hint text {
+  font-size: 10.5px;
+  color: #b0b0b0;
+  line-height: 16px;
+}
+
 .slider-row {
   display: flex;
   align-items: center;
-  margin-bottom: 4px;
+  margin-bottom: 2px;
 }
 .slider-label {
   width: 40px;

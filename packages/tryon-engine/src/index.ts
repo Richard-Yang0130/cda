@@ -12,6 +12,8 @@
  *   engine.start()
  */
 export * from './platform'
+export * from './sdf'
+export * from './surface-nets'
 export * from './body'
 export * from './garment'
 export * from './engine'
