@@ -51,7 +51,7 @@
           v-for="g in genders"
           :key="g.value"
           class="gender-chip"
-          :class="{ active: body.gender === g.value }"
+          :class="{ active: state.gender === g.value }"
           @click="setGender(g.value)"
         >
           <text>{{ g.label }}</text>
@@ -64,7 +64,7 @@
           v-for="b in builds"
           :key="b.id"
           class="preset-chip"
-          :class="{ active: body.build === b.id }"
+          :class="{ active: state.build === b.id }"
           @click="setBuild(b.id)"
         >
           <text>{{ b.name }}</text>
@@ -77,17 +77,17 @@
         <text class="slider-label">{{ m.label }}</text>
         <slider
           class="slider"
-          :value="body[m.key]"
-          :min="m.min"
-          :max="m.max"
+          :value="fieldValue(m.key)"
+          :min="fieldRange(m.key).min"
+          :max="fieldRange(m.key).max"
           :step="1"
           activeColor="#1a1a1a"
           block-color="#1a1a1a"
           :block-size="16"
-          @changing="(e: any) => onMeasureChange(m.key, e.detail.value, 'changing')"
-          @change="(e: any) => onMeasureChange(m.key, e.detail.value, 'change')"
+          @changing="(e: any) => onFieldChange(m.key, e.detail.value, 'changing')"
+          @change="(e: any) => onFieldChange(m.key, e.detail.value, 'change')"
         />
-        <text class="slider-value">{{ body[m.key] }}{{ m.unit }}</text>
+        <text class="slider-value">{{ fieldValue(m.key) }}{{ m.unit }}</text>
       </view>
 
       <text class="group-title">分区调整</text>
@@ -107,22 +107,31 @@
         <text class="slider-label">{{ m.label }}</text>
         <slider
           class="slider"
-          :value="body[m.key]"
-          :min="m.min"
-          :max="m.max"
+          :value="fieldValue(m.key)"
+          :min="fieldRange(m.key).min"
+          :max="fieldRange(m.key).max"
           :step="1"
           activeColor="#1a1a1a"
           block-color="#1a1a1a"
           :block-size="16"
-          @changing="(e: any) => onMeasureChange(m.key, e.detail.value, 'changing')"
-          @change="(e: any) => onMeasureChange(m.key, e.detail.value, 'change')"
+          @changing="(e: any) => onFieldChange(m.key, e.detail.value, 'changing')"
+          @change="(e: any) => onFieldChange(m.key, e.detail.value, 'change')"
         />
-        <text class="slider-value">{{ body[m.key] }}{{ m.unit }}</text>
+        <text class="slider-value">{{ fieldValue(m.key) }}{{ m.unit }}</text>
       </view>
 
-      <view class="normalize-hint">
-        <text>各段相加 {{ segmentSum }}cm · 身高 {{ body.heightCm }}cm · 引擎会按比例归一</text>
+      <text class="group-title">健康指标</text>
+      <view class="health-row">
+        <view v-for="mt in metrics" :key="mt.key" class="health-item" :class="mt.level">
+          <text class="health-label">{{ mt.label }}</text>
+          <text class="health-value">{{ mt.display }}</text>
+          <text class="health-note">{{ mt.note }}</text>
+        </view>
       </view>
+      <text class="health-tip">
+        所有围度与体重由同一个体脂因子派生，因此拖动任意一项都会牵动全身；
+        可拖范围也随身高重新计算，越界的状态在生理上不存在。
+      </text>
     </view>
 
     <!-- ───────────── 我的衣橱 ───────────── -->
@@ -212,7 +221,14 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, nextTick, ref, reactive, computed } from 'vue'
 import { onShow } from '@dcloudio/uni-app'
-import { findProduct, defaultBodyProfile, BODY_BUILDS, CATEGORY_LABEL, type BodyBuildId, type Category, type WearMode } from '@cda/core'
+import {
+  findProduct, CATEGORY_LABEL, BODY_BUILDS,
+  createBodyState, deriveProfile, weightAt, girthAt, rangeOf,
+  setHeight, setWeight, setGirth, setFrame, setGender as setGenderState,
+  healthMetrics, GIRTH_KEYS,
+  type BodyBuildId, type BodyState, type Category, type FrameKey,
+  type GirthKey, type WearMode,
+} from '@cda/core'
 import { TryonEngine, createH5Platform, WEAR_MODE_LABEL, GARMENT_REGISTRY } from '@cda/tryon-engine'
 import { mountStage, type StageHost } from '@/platform/stage'
 import { store } from '@/store/app-store'
@@ -224,22 +240,38 @@ let stage: StageHost | null = null
 
 const stageHint = ref('按住可旋转人偶')
 
-/** 身型数据（与 store 共用同一份对象，改动会同步到穿搭建议页） */
-const body = reactive({ ...store.body })
+/**
+ * 身型状态。
+ *
+ * 注意这里存的是 **BodyState 而不是直接存围度** ——
+ * 围度由潜在因子（体脂水平）派生，所以拖动任何一项都会牵动全身。
+ * 详见 packages/core/src/body-model.ts。
+ */
+const state = reactive(createBodyState('female', 'average'))
+const profile = computed(() => deriveProfile(state))
+const metrics = computed(() => healthMetrics(profile.value))
 
-/** 滑杆分组配置。key 直接对应 BodyProfile 的数字字段 */
-type NumericKey =
-  | 'heightCm' | 'weightKg' | 'shoulderWidthCm'
-  | 'chestCm' | 'waistCm' | 'hipCm' | 'upperArmCircCm' | 'thighCircCm'
-  | 'torsoLengthCm' | 'neckLengthCm' | 'upperArmCm' | 'forearmCm' | 'thighCm' | 'calfCm'
+/** 滑杆字段的种类决定它走哪条耦合路径 */
+type FieldKey = 'heightCm' | 'weightKg' | GirthKey | FrameKey
 
 interface MeasureField {
-  key: NumericKey
+  key: FieldKey
   label: string
   unit: string
-  min: number
-  max: number
 }
+
+/** 骨骼维度：与体脂无关，范围是固定的 */
+const FRAME_RANGES: Record<FrameKey, { min: number; max: number }> = {
+  shoulderWidthCm: { min: 32, max: 56 },
+  neckLengthCm: { min: 5, max: 18 },
+  torsoLengthCm: { min: 34, max: 62 },
+  upperArmCm: { min: 22, max: 42 },
+  forearmCm: { min: 18, max: 34 },
+  thighCm: { min: 34, max: 60 },
+  calfCm: { min: 28, max: 52 },
+}
+
+const girthSet = new Set<string>(GIRTH_KEYS)
 
 /** 分区建模：按游戏捏人的习惯分段，而不是一次给一长条滑杆 */
 type StageId = 'head' | 'upper' | 'lower'
@@ -252,41 +284,55 @@ const stages: Array<{ id: StageId; name: string }> = [
 
 const activeStage = ref<StageId>('upper')
 
-/** 基础数据不分阶段，始终显示 */
-const basicFields: MeasureField[] = [
-  { key: 'heightCm', label: '身高', unit: 'cm', min: 145, max: 205 },
-  { key: 'weightKg', label: '体重', unit: 'kg', min: 35, max: 130 },
-]
-
-/** 各阶段的可调参数 */
-const stageFields: Record<StageId, MeasureField[]> = {
-  head: [{ key: 'neckLengthCm', label: '颈长', unit: 'cm', min: 5, max: 18 }],
-  upper: [
-    { key: 'shoulderWidthCm', label: '肩宽', unit: 'cm', min: 32, max: 56 },
-    { key: 'chestCm', label: '胸围', unit: 'cm', min: 68, max: 130 },
-    { key: 'waistCm', label: '腰围', unit: 'cm', min: 50, max: 130 },
-    { key: 'torsoLengthCm', label: '上身长', unit: 'cm', min: 34, max: 62 },
-    { key: 'upperArmCircCm', label: '大臂围', unit: 'cm', min: 20, max: 45 },
-    { key: 'upperArmCm', label: '大臂长', unit: 'cm', min: 22, max: 42 },
-    { key: 'forearmCm', label: '小臂长', unit: 'cm', min: 18, max: 34 },
-  ],
-  lower: [
-    { key: 'hipCm', label: '臀围', unit: 'cm', min: 72, max: 140 },
-    { key: 'thighCircCm', label: '大腿围', unit: 'cm', min: 38, max: 80 },
-    { key: 'thighCm', label: '大腿长', unit: 'cm', min: 34, max: 60 },
-    { key: 'calfCm', label: '小腿长', unit: 'cm', min: 28, max: 52 },
-  ],
-}
-
 const genders = [
   { value: 'female' as const, label: '女性' },
   { value: 'male' as const, label: '男性' },
 ]
 
+const basicFields: MeasureField[] = [
+  { key: 'heightCm', label: '身高', unit: 'cm' },
+  { key: 'weightKg', label: '体重', unit: 'kg' },
+]
+
+const stageFields: Record<StageId, MeasureField[]> = {
+  head: [{ key: 'neckLengthCm', label: '颈长', unit: 'cm' }],
+  upper: [
+    { key: 'shoulderWidthCm', label: '肩宽', unit: 'cm' },
+    { key: 'chestCm', label: '胸围', unit: 'cm' },
+    { key: 'waistCm', label: '腰围', unit: 'cm' },
+    { key: 'torsoLengthCm', label: '上身长', unit: 'cm' },
+    { key: 'upperArmCircCm', label: '大臂围', unit: 'cm' },
+    { key: 'upperArmCm', label: '大臂长', unit: 'cm' },
+    { key: 'forearmCm', label: '小臂长', unit: 'cm' },
+  ],
+  lower: [
+    { key: 'hipCm', label: '臀围', unit: 'cm' },
+    { key: 'thighCircCm', label: '大腿围', unit: 'cm' },
+    { key: 'thighCm', label: '大腿长', unit: 'cm' },
+    { key: 'calfCm', label: '小腿长', unit: 'cm' },
+  ],
+}
+
+/** 取某项的当前值 */
+function fieldValue(key: FieldKey): number {
+  if (key === 'heightCm') return state.heightCm
+  if (key === 'weightKg') return Math.round(weightAt(state) * 10) / 10
+  if (girthSet.has(key)) return Math.round(girthAt(state, key as GirthKey))
+  return Math.round(state.frame[key as FrameKey] * 10) / 10
+}
+
+/** 取某项的可拖范围。围度与体重的范围是**派生**的，不是写死的 */
+function fieldRange(key: FieldKey): { min: number; max: number } {
+  if (key === 'heightCm') return { min: 145, max: 205 }
+  if (key === 'weightKg') return rangeOf(state, 'weightKg')
+  if (girthSet.has(key)) return rangeOf(state, key as GirthKey)
+  return FRAME_RANGES[key as FrameKey]
+}
+
 /** 形体风格：定「偏肌肉还是偏脂肪」，具体维度仍由上面的数据决定 */
 const builds = BODY_BUILDS
 const activeBuildDesc = computed(
-  () => builds.find((b) => b.id === body.build)?.description ?? '',
+  () => builds.find((b) => b.id === state.build)?.description ?? '',
 )
 
 /**
@@ -294,14 +340,6 @@ const activeBuildDesc = computed(
  * 用户填的数据常常不自洽，引擎会自动按比例归一 —— 这里把它显示出来，
  * 避免用户以为是自己填错了。
  */
-const segmentSum = computed(() => {
-  const headApprox = body.heightCm * 0.13
-  const ankleApprox = body.heightCm * 0.045
-  return Math.round(
-    headApprox + ankleApprox +
-    body.calfCm + body.thighCm + body.torsoLengthCm + body.neckLengthCm,
-  )
-})
 
 const worn = ref<string[]>([])
 const selectedGarment = ref<string | null>(null)
@@ -367,7 +405,7 @@ function initEngine() {
     canvas: stage.canvas,
     width: stage.width,
     height: stage.height,
-    bodyProfile: currentProfile(),
+    bodyProfile: deriveProfile(state),
   })
 
   stage.onResize((w, h) => engine?.resize(w, h))
@@ -412,12 +450,10 @@ function applyPoseFromQuery() {
   // #endif
 }
 
+/** 引擎需要的是展开后的完整身型数据 */
 function currentProfile() {
-  // body 已经是完整 BodyProfile，直接浅拷贝给引擎
-  return { ...body }
+  return deriveProfile(state)
 }
-
-// ───────────────────────────── 身型
 
 /**
  * 拖动过程中的重算合并到下一帧。
@@ -431,48 +467,50 @@ function schedulePreview() {
   previewScheduled = true
   const run = () => {
     previewScheduled = false
-    engine?.setBodyProfile({ ...body }, 'preview')
+    engine?.setBodyProfile(currentProfile(), 'preview')
   }
   if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run)
   else setTimeout(run, 16)
 }
 
 /**
- * @param phase 'changing' = 拖动中（低精度预览）；'change' = 松手（全精度重建）
+ * 改一项数据。
+ *
+ * 关键：这里**不是**把某个几何参数改掉，而是把它换算成潜在因子（体脂水平），
+ * 再由潜在因子重算全身 —— 所以拖臀围时腰围、大腿围、体重会一起变，
+ * 用户感受到的是「人在变」，而不是「一个球在胀」。
  */
-function onMeasureChange(key: string, value: number, phase: 'changing' | 'change' = 'change') {
-  const target = body as unknown as Record<string, number>
-  target[key] = value
-  Object.assign(store.body, body)
+function onFieldChange(key: FieldKey, value: number, phase: 'changing' | 'change' = 'change') {
+  let next: BodyState = state
+  if (key === 'heightCm') next = setHeight(state, value)
+  else if (key === 'weightKg') next = setWeight(state, value)
+  else if (girthSet.has(key)) next = setGirth(state, key as GirthKey, value)
+  else next = setFrame(state, key as FrameKey, value)
 
-  if (phase === 'changing') {
-    schedulePreview()
-    return
-  }
-  engine?.setBodyProfile({ ...body }, 'final')
+  Object.assign(state, next)
+  Object.assign(store.body, currentProfile())
+
+  if (phase === 'changing') schedulePreview()
+  else engine?.setBodyProfile(currentProfile(), 'final')
 }
 
-/** 切换性别：套用对应的默认数据，保留形体风格 */
+/** 切换性别：保留体脂水平与身高，骨骼维度按新性别重建 */
 function setGender(gender: 'male' | 'female') {
-  if (body.gender === gender) return
-  const next = defaultBodyProfile(gender)
-  next.build = body.build
-  next.heightCm = body.heightCm
-  Object.assign(body, next)
-  Object.assign(store.body, body)
-  engine?.setBodyProfile({ ...body }, 'final')
+  if (state.gender === gender) return
+  Object.assign(state, setGenderState(state, gender))
+  Object.assign(store.body, currentProfile())
+  engine?.setBodyProfile(currentProfile(), 'final')
 }
 
 /**
  * 切换形体风格。
- * 它只改变形体语言（肌肉隆起、脂肪堆积），**不改任何尺寸数字** ——
- * 尺寸是用户自己的身体数据。
+ * 只改变形体语言（肌肉隆起、脂肪堆积），**不动任何尺寸数字**。
  */
 function setBuild(id: BodyBuildId) {
-  if (body.build === id) return
-  body.build = id
-  Object.assign(store.body, body)
-  engine?.setBodyProfile({ ...body }, 'final')
+  if (state.build === id) return
+  state.build = id
+  Object.assign(store.body, currentProfile())
+  engine?.setBodyProfile(currentProfile(), 'final')
 }
 
 // ───────────────────────────── 穿脱
@@ -883,6 +921,53 @@ function onItemClick(item: { productId: string }) {
   letter-spacing: 1px;
   margin: 6px 0 4px;
 }
+.health-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.health-item {
+  flex: 1;
+  padding: 9px 8px;
+  border-radius: 12px;
+  background: #f5f5f5;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-left: 3px solid #c8c8c8;
+}
+.health-item.good {
+  background: #eef7ee;
+  border-left-color: #4a9d4a;
+}
+.health-item.watch {
+  background: #fdf6e8;
+  border-left-color: #d9a441;
+}
+.health-item.risk {
+  background: #fdecec;
+  border-left-color: #c0504d;
+}
+.health-label {
+  font-size: 10px;
+  color: #8a8a8a;
+}
+.health-value {
+  font-size: 15px;
+  font-weight: 600;
+}
+.health-note {
+  font-size: 9.5px;
+  color: #9a9a9a;
+  line-height: 13px;
+}
+.health-tip {
+  display: block;
+  font-size: 10.5px;
+  color: #b0b0b0;
+  line-height: 16px;
+}
+
 .normalize-hint {
   margin-top: 10px;
   padding-top: 10px;

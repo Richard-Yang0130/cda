@@ -1,5 +1,6 @@
 export * from './types'
 export * from './presets'
+export * from './body-model'
 export * from './mock'
 export * from './sample-images'
 export * from './services/tryon'
