@@ -30,7 +30,8 @@ export default defineConfig({
   },
 
   server: {
-    host: '127.0.0.1',
+    // 监听 0.0.0.0 以便手机在同一局域网内访问（发给用户试用）
+    host: '0.0.0.0',
     port: 5173,
   },
 })

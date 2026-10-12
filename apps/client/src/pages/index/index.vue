@@ -33,9 +33,6 @@
         <text class="hint-text">{{ stageHint }}</text>
       </view>
       <view class="stage-tools">
-        <view class="tool-btn" :class="{ on: useMesh }" @click="toggleMesh">
-          <text>{{ meshLoading ? '加载中…' : useMesh ? '雕刻白模 ✓' : '换成雕刻白模' }}</text>
-        </view>
         <view class="tool-btn" @click="resetCamera"><text>重置视角</text></view>
         <view class="tool-btn" @click="clearAll"><text>全部脱下</text></view>
       </view>
@@ -414,6 +411,8 @@ function initEngine() {
   stage.onResize((w, h) => engine?.resize(w, h))
   engine.start()
   stageHint.value = '按住可旋转人偶'
+  // SDF 人体已下线，雕刻网格是唯一的身体，创建后立即加载
+  void loadMesh()
   applyPoseFromQuery()
   applyPendingOutfit()
 }
@@ -461,7 +460,7 @@ function applyPoseFromQuery() {
  * 见 packages/tryon-engine/src/mesh-body.ts。
  * SDF 人体同时保留（服装壳的射线求交依赖它），两者由同一份身型数据驱动。
  */
-const useMesh = ref(false)
+const useMesh = ref(true)
 const meshLoading = ref(false)
 const meshError = ref('')
 
@@ -481,15 +480,9 @@ async function loadMesh() {
 }
 
 /**
- * 开关雕刻网格。
- * ⚠️ 曾经的问题：开启后按钮文案改为「雕刻白模」，再点无效 ——
- * 于是**切换性别后网格不会跟着换**（切到男性仍是女性身体）。
- * 现在开关只负责开，性别变化由 setGender 负责重载。
+ * SDF 人体已下线，雕刻网格是唯一的身体。
+ * 不再提供开关 —— 两具身体并存只会让人分不清哪个是真的。
  */
-async function toggleMesh() {
-  if (useMesh.value) return
-  await loadMesh()
-}
 
 function currentProfile() {
   return deriveProfile(state)
