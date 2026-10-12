@@ -52,6 +52,17 @@ interface LimbAxis {
   r: number
 }
 
+/** 一个体段：轴 + 参考半径剖面（按 t 等分采样） */
+interface MeshSegment {
+  name: string
+  a: THREE.Vector3
+  b: THREE.Vector3
+  len: number
+  dir: THREE.Vector3
+  /** 沿段的参考半径采样，长度固定 */
+  refR: number[]
+}
+
 export interface MeshBodySpec {
   url: string
   gender: 'male' | 'female'
@@ -78,12 +89,8 @@ export class MeshBody implements BodySurface {
   private readonly geo: THREE.BufferGeometry
   /** 归一化后的原始顶点（身高 1.0），每次重拟合都从这里出发，避免累积误差 */
   private readonly base: Float32Array
-  private readonly trunk: ControlLevel[]
-  /** 左右两侧的腿/臂轴心。用显式字段而不是 Record<1|-1>，避免靠断言糊过去 */
-  private readonly legAxisR: LimbAxis[]
-  private readonly legAxisL: LimbAxis[]
-  private readonly armAxisR: LimbAxis[]
-  private readonly armAxisL: LimbAxis[]
+  /** 体段（轴 + 参考半径剖面）。改体型全靠它做柱面重参数化 */
+  private readonly segments: MeshSegment[] = []
   private profile: BodyProfile
 
   private constructor(
@@ -118,11 +125,7 @@ export class MeshBody implements BodySurface {
     // 又因为看不到中间数据而极难调试（先前在这里反复出错）。
     this.base = base
 
-    this.trunk = this.measureTrunk(this.base)
-    this.legAxisR = this.measureLeg(this.base, 1)
-    this.legAxisL = this.measureLeg(this.base, -1)
-    this.armAxisR = this.measureArm(this.base, 1)
-    this.armAxisL = this.measureArm(this.base, -1)
+    this.buildSegments(this.base)
 
     // 白模材质
     const mat = new THREE.MeshPhysicalMaterial({
@@ -152,131 +155,141 @@ export class MeshBody implements BodySurface {
     return new MeshBody(obj, profile, { url, gender })
   }
 
-  /** 量出各控制高度上躯干的参考半径 */
-  private measureTrunk(base: Float32Array): ControlLevel[] {
-    const out: ControlLevel[] = []
-    for (const y of [LEVELS.hip, LEVELS.waist, LEVELS.chest, LEVELS.shoulder]) {
-      const rs: number[] = []
-      for (let i = 0; i < base.length; i += 3) {
-        const vy = base[i + 1]!
-        if (Math.abs(vy - y) > 0.015) continue
-        const vx = base[i]!
-        // 只取靠近中轴的顶点（躯干），排除手臂
-        if (Math.abs(vx) > 0.13) continue
-        rs.push(Math.hypot(vx, base[i + 2]!))
-      }
-      out.push({ y, trunkR: median(rs) })
-    }
-    return out
-  }
+    // ────────────────────────────────────────────────────────
+  // 按段柱面重参数化
+  // ────────────────────────────────────────────────────────
 
-  /** 量出单侧腿在各高度的轴心与半径 */
-  private measureLeg(base: Float32Array, side: 1 | -1): LimbAxis[] {
-    const ys = [LEVELS.ankle, LEVELS.knee, LEVELS.crotch - 0.05]
-    const out: LimbAxis[] = []
-    for (const y of ys) {
-      const xs: number[] = []
-      const zs: number[] = []
-      const pts: Array<[number, number]> = []
-      for (let i = 0; i < base.length; i += 3) {
-        const vy = base[i + 1]!
-        if (Math.abs(vy - y) > 0.015) continue
-        const vx = base[i]!
-        if (Math.sign(vx) !== side || Math.abs(vx) < 0.02) continue
-        xs.push(vx)
-        zs.push(base[i + 2]!)
-        pts.push([vx, base[i + 2]!])
-      }
-      const cx = median(xs)
-      const cz = median(zs)
-      const rs = pts.map(([x, z]) => Math.hypot(x - cx, z - cz))
-      out.push({ y, cx, cz, r: median(rs) })
-    }
-    return out
-  }
+  /**
+   * 从网格自身量出各体段的轴心与半径剖面。
+   *
+   * 关键认识：**网格自身的锥度（手细臂粗）本来就是对的**，
+   * 不该由我重新规定。所以这里只量它，改体型时按段整体缩放，
+   * 锥度原样保留 —— 「手部分粗部分细」正是上一版重新规定锥度造成的。
+   */
+  private buildSegments(base: Float32Array): void {
+    const n = base.length / 3
+    const P = (i: number) => new THREE.Vector3(base[i * 3]!, base[i * 3 + 1]!, base[i * 3 + 2]!)
 
-  /** 量出单侧上臂在各高度的轴心与半径 */
-  private measureArm(base: Float32Array, side: 1 | -1): LimbAxis[] {
-    const out: LimbAxis[] = []
-    for (const y of [ELBOW_Y, WRIST_Y]) {
-      const pts: Array<[number, number]> = []
-      for (let i = 0; i < base.length; i += 3) {
-        const vy = base[i + 1]!
-        if (Math.abs(vy - y) > 0.015) continue
-        const vx = base[i]!
-        if (Math.sign(vx) !== side) continue
-        if (Math.abs(vx) < 0.14) continue // 排除躯干
-        pts.push([vx, base[i + 2]!])
+    // 先粗测肩/腕/胯/踝的位置，用来定义各段轴
+    const at = (y: number, pred: (v: THREE.Vector3) => boolean) => {
+      const pts: THREE.Vector3[] = []
+      for (let i = 0; i < n; i++) {
+        const v = P(i)
+        if (Math.abs(v.y - y) > 0.02 || !pred(v)) continue
+        pts.push(v)
       }
-      const cx = median(pts.map((p) => p[0]))
-      const cz = median(pts.map((p) => p[1]))
-      const rs = pts.map(([x, z]) => Math.hypot(x - cx, z - cz))
-      out.push({ y, cx, cz, r: median(rs) })
+      if (!pts.length) return null
+      const c = new THREE.Vector3()
+      pts.forEach((q) => c.add(q))
+      return c.divideScalar(pts.length)
     }
-    return out
-  }
 
-  /** 在某高度的参考躯干半径（线性插值） */
-  private refTrunkR(y: number): number {
-    const L = this.trunk
-    if (y <= L[0]!.y) return L[0]!.trunkR
-    for (let i = 0; i < L.length - 1; i++) {
-      const a = L[i]!
-      const b = L[i + 1]!
-      if (y >= a.y && y <= b.y) {
-        const k = (y - a.y) / (b.y - a.y)
-        return a.trunkR + (b.trunkR - a.trunkR) * k
-      }
+    const shoulderY = LEVELS.shoulder - 0.02
+    const crotchY = LEVELS.crotch
+    const neckY = LEVELS.shoulder + 0.03
+    const headTopY = 1.0
+
+    const defs: Array<{ name: string; a: THREE.Vector3; b: THREE.Vector3 }> = []
+    // 躯干：裆 → 颈根（竖直）
+    defs.push({
+      name: 'torso',
+      a: new THREE.Vector3(0, crotchY, 0),
+      b: new THREE.Vector3(0, neckY, 0),
+    })
+    // 头颈：只随身高缩放，不参与围度
+    defs.push({
+      name: 'head',
+      a: new THREE.Vector3(0, neckY, 0),
+      b: new THREE.Vector3(0, headTopY, 0),
+    })
+    for (const side of [1, -1] as const) {
+      const sh = at(shoulderY, (v) => Math.sign(v.x) === side && Math.abs(v.x) > 0.09)
+      const wr = at(0.57, (v) => Math.sign(v.x) === side && Math.abs(v.x) > 0.2)
+      const hip = at(crotchY - 0.03, (v) => Math.sign(v.x) === side)
+      const an = at(LEVELS.ankle + 0.01, (v) => Math.sign(v.x) === side)
+      const sgn = side > 0 ? 'R' : 'L'
+      if (sh && wr) defs.push({ name: `arm${sgn}`, a: sh, b: wr })
+      if (hip && an) defs.push({ name: `leg${sgn}`, a: hip, b: an })
     }
-    return L[L.length - 1]!.trunkR
+
+    // 分段量半径剖面（先按**原始距离**粗分，够用：各段轴本来就穿过各自的肢体）
+    const N = 14
+    for (const d of defs) {
+      const axis = new THREE.Vector3().subVectors(d.b, d.a)
+      const len = axis.length()
+      const dir = axis.clone().divideScalar(Math.max(len, 1e-6))
+      const buckets: number[][] = Array.from({ length: N }, () => [])
+      for (let i = 0; i < n; i++) {
+        const v = P(i)
+        const rel = new THREE.Vector3().subVectors(v, d.a)
+        const t = rel.dot(dir) / Math.max(len, 1e-6)
+        if (t < -0.02 || t > 1.02) continue
+        const perp = rel.clone().addScaledVector(dir, -rel.dot(dir)).length()
+        const bi = Math.min(N - 1, Math.max(0, Math.round(t * (N - 1))))
+        buckets[bi]!.push(perp)
+      }
+      const refR = buckets.map((b) => {
+        if (!b.length) return 0
+        b.sort((x, y) => x - y)
+        // 取 88 分位：接近外表面，但不被个别飞点拉偏
+        return b[Math.min(b.length - 1, Math.floor(b.length * 0.88))]!
+      })
+      this.segments.push({
+        name: d.name,
+        a: d.a,
+        b: d.b,
+        len,
+        dir,
+        refR,
+      })
+    }
   }
 
   /**
-   * 按新的身型数据重拟合。
+   * 顶点到某段的「归一化距离」= 垂距 ÷ 该处参考半径。
    *
-   * 每个顶点按所属区域取不同的增益：
-   *   裆以下 → 腿段（按该侧腿轴心做径向缩放）
-   *   裆到肩 → 躯干（按中轴）/ 手臂（按该侧臂轴心，靠 |x| 区分）
-   *   肩以上 → 头颈，只随身高缩放
+   * ⚠️ 用归一化距离而不是原始距离来判断归属 —— 这是胸部塌陷的根治办法：
+   *   女性胸部顶点：到手臂轴 0.095（原始距离更近）、到躯干轴 0.15
+   *   但归一化后：0.095/0.05 = 1.9（远在手臂表面之外）
+   *               0.15/0.18 = 0.83（在躯干表面之内）
+   *   → 归躯干，正确。原始距离比较会把它判成手臂。
    */
+  private segScore(seg: MeshSegment, v: THREE.Vector3): { score: number; t: number; perp: THREE.Vector3 } {
+    const rel = new THREE.Vector3().subVectors(v, seg.a)
+    const proj = rel.dot(seg.dir)
+    const t = Math.min(1, Math.max(0, proj / Math.max(seg.len, 1e-6)))
+    const perp = rel.clone().addScaledVector(seg.dir, -proj)
+    const idx = Math.round(t * (seg.refR.length - 1))
+    const r = seg.refR[idx] || 1e-4
+    return { score: perp.length() / Math.max(r, 1e-4), t, perp }
+  }
+
   setProfile(profile: BodyProfile): void {
     this.profile = profile
     const heightM = profile.heightCm / 100
-
-    /**
-     * ⚠️ 关键设计：**雕刻网格本身就是基准形体，只施加「相对中性档案的偏移量」**。
-     *
-     * 一开始我按「绝对匹配」做 —— 把目标围度直接除以网格实测半径。
-     * 结果是灾难性的：网格自身胸半径 18.2cm（围度 114cm），
-     * 而默认女性档案只有 86cm，增益 0.455，把躯干压扁到 45%，
-     * 满身硬边与鼓包。
-     *
-     * 正确做法：
-     *   gain = 耦合模型(用户) / 耦合模型(中性档案)
-     * 用户是平均身材时网格**原样不动**，雕刻的美术比例得以保留；
-     * 偏胖偏瘦时才在基准上按比例偏移。
-     *
-     * 围度一律用比值，避免 cm/m/归一化三套单位互相污染
-     * （之前正是这里漏了 /100 又漏乘 heightM，人偶被放大 100 倍）。
-     */
     const neutral = defaultBodyProfile(profile.gender)
-    const ratio = (v: number, n: number) => (n > 1e-6 ? v / n : 1)
+    const ratio = (v: number, nn: number) => (nn > 1e-6 ? v / nn : 1)
 
-    const hipG = ratio(profile.hipCm, neutral.hipCm)
-    const waistG = ratio(profile.waistCm, neutral.waistCm)
-    const chestG = ratio(profile.chestCm, neutral.chestCm)
-    const legGain = ratio(profile.thighCircCm, neutral.thighCircCm)
-    const armGain = ratio(profile.upperArmCircCm, neutral.upperArmCircCm)
-
-    /** 躯干增益随高度在 胯/腰/胸 三点间线性插值 */
-    const trunkGain = (y: number): number => {
+    // 各段的整体增益。四肢用**常数**增益 —— 网格自身的锥度保留，
+    // 只整体缩放，于是不会出现「一段粗一段细」。
+    // 躯干按高度变（胯/腰/胸三点），并在肩以上**回到 1.0** ——
+    // 肩宽属骨骼，不该随胸围变（上一版肩部鼓包就是这个原因）。
+    const gainOf = (name: string, t: number): number => {
+      if (name === 'head') return 1
+      if (name.startsWith('arm')) return ratio(profile.upperArmCircCm, neutral.upperArmCircCm)
+      if (name.startsWith('leg')) return ratio(profile.thighCircCm, neutral.thighCircCm)
+      // 躯干：把 t 还原成归一化身高，再在三个控制点上取值
+      const y = LEVELS.crotch + t * (LEVELS.shoulder + 0.03 - LEVELS.crotch)
+      const gHip = ratio(profile.hipCm, neutral.hipCm)
+      const gWaist = ratio(profile.waistCm, neutral.waistCm)
+      const gChest = ratio(profile.chestCm, neutral.chestCm)
       const pts: Array<[number, number]> = [
-        [LEVELS.hip, hipG],
-        [LEVELS.waist, waistG],
-        [LEVELS.chest, chestG],
+        [LEVELS.hip, gHip],
+        [LEVELS.waist, gWaist],
+        [LEVELS.chest, gChest],
+        [LEVELS.shoulder + 0.03, 1],
       ]
       if (y <= pts[0]![0]) return pts[0]![1]
-      if (y >= pts[pts.length - 1]![0]) return pts[pts.length - 1]![1]
       for (let i = 0; i < pts.length - 1; i++) {
         const [ya, ga] = pts[i]!
         const [yb, gb] = pts[i + 1]!
@@ -285,64 +298,56 @@ export class MeshBody implements BodySurface {
       return 1
     }
 
-    /** 平滑过渡：硬边界会让相邻顶点拿到不同增益，网格上直接撕裂成硬边 */
-    const smoothstep = (e0: number, e1: number, v: number) => {
-      const t = Math.min(1, Math.max(0, (v - e0) / (e1 - e0)))
-      return t * t * (3 - 2 * t)
-    }
-
     const pos = this.geo.getAttribute('position') as THREE.BufferAttribute
     const arr = pos.array as Float32Array
     const base = this.base
+    const v = new THREE.Vector3()
+    const acc = new THREE.Vector3()
+    const wSum: number[] = []
+    const scored: Array<{ seg: MeshSegment; s: ReturnType<MeshBody['segScore']> }> = []
 
     for (let i = 0; i < base.length; i += 3) {
-      const x0 = base[i]!
-      const y0 = base[i + 1]!
-      const z0 = base[i + 2]!
-      let x = x0
-      let y = y0
-      let z = z0
-
-      // 手臂与躯干之间按 |x| 平滑混合，而不是硬切
-      const armBlend = smoothstep(0.11, 0.17, Math.abs(x0))
-      const legBlend = 1 - smoothstep(LEVELS.crotch - 0.035, LEVELS.crotch + 0.035, y0)
-
-      if (armBlend < 1) {
-        const g = trunkGain(y0)
-        const tx = x0 * g
-        const tz = z0 * g
-        x = x + (tx - x) * (1 - armBlend)
-        z = z + (tz - z) * (1 - armBlend)
+      v.set(base[i]!, base[i + 1]!, base[i + 2]!)
+      scored.length = 0
+      wSum.length = 0
+      let total = 0
+      for (const seg of this.segments) {
+        const sc = this.segScore(seg, v)
+        // 权重 = 1/score^p。p 取 5：最近的那段压倒性主导，
+        // 同时过渡仍是连续的，不会像硬切那样撕裂。
+        const w = 1 / (Math.pow(sc.score, 5) + 1e-3)
+        scored.push({ seg, s: sc })
+        wSum.push(w)
+        total += w
       }
-      if (armBlend > 0) {
-        const ax = this.nearestAxis(x0 >= 0 ? this.armAxisR : this.armAxisL, y0)
-        if (ax) {
-          const ax1 = ax.cx + (x0 - ax.cx) * armGain
-          const az1 = ax.cz + (z0 - ax.cz) * armGain
-          x = x + (ax1 - x) * armBlend
-          z = z + (az1 - z) * armBlend
-        }
+      if (total <= 0) {
+        arr[i] = v.x * heightM
+        arr[i + 1] = v.y * heightM
+        arr[i + 2] = v.z * heightM
+        continue
       }
-      if (legBlend > 0) {
-        const ax = this.nearestAxis(x0 >= 0 ? this.legAxisR : this.legAxisL, y0)
-        if (ax) {
-          const lx = ax.cx + (x0 - ax.cx) * legGain
-          const lz = ax.cz + (z0 - ax.cz) * legGain
-          x = x + (lx - x) * legBlend
-          z = z + (lz - z) * legBlend
-        }
+      /*
+       * ⚠️ 只混合**位移量**，绝不能混合「轴心 + 缩放后垂距」的绝对位置。
+       *
+       * 各段的轴心相距很远（一个躯干顶点也会被腿段的轴心算出一个分数），
+       * 把绝对位置加权平均，结果会被远端的轴心拽走 ——
+       * 人偶直接揉成一团。位移量在增益接近 1 时本来就很小，
+       * 混合它才是安全的。
+       */
+      acc.set(0, 0, 0)
+      for (let k = 0; k < scored.length; k++) {
+        const { seg, s } = scored[k]!
+        const g = gainOf(seg.name, s.t)
+        acc.addScaledVector(s.perp, ((g - 1) * wSum[k]!) / total)
       }
-      // 肩以上（头颈）只随身高缩放
-
-      arr[i] = x * heightM
-      arr[i + 1] = y * heightM
-      arr[i + 2] = z * heightM
+      arr[i] = (v.x + acc.x) * heightM
+      arr[i + 1] = (v.y + acc.y) * heightM
+      arr[i + 2] = (v.z + acc.z) * heightM
     }
 
     pos.needsUpdate = true
     this.geo.computeVertexNormals()
     this.geo.computeBoundingSphere()
-
   }
 
   private nearestAxis(list: LimbAxis[], y: number): LimbAxis | null {
