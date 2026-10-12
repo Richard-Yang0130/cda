@@ -190,13 +190,25 @@ export class TryonEngine {
    * 距离由身高与相机垂直 FOV 反解得到，因此改变身高后取景依然合理。
    */
   private frameBody(): void {
-    const bodyHeight = this.model.skeleton.height
-    this.targetY = bodyHeight * 0.5
+    /*
+     * ⚠️ 取景必须按**固定参考身高**，不能按实际身高。
+     *
+     * 原来用 bodyHeight 反解距离，于是人变高 → 相机同步后退 →
+     * 画面上人始终一样高。用户拖身高滑杆「人不会变长」，
+     * 就是这个原因（网格其实真的变高了，只是看不出来）。
+     *
+     * 现在按 1.95m 取景：145–205cm 的人都能完整入画，
+     * 而高矮差异**真实可见**。
+     */
+    const FRAME_REF = 2.15
+    const H = this.model.skeleton.height
+    this.targetY = H * 0.5
     const fovRad = (this.camera.fov * Math.PI) / 180
-    // 留 18% 余量，避免头顶/脚底贴边
-    this.baseDistance = (bodyHeight * 1.18) / (2 * Math.tan(fovRad / 2))
+    // 参考值取 2.15m：205cm 的人也能完整入画（含脚），且高矮差异清晰可见
+    this.baseDistance = FRAME_REF / (2 * Math.tan(fovRad / 2))
     this.distance = this.baseDistance
   }
+
 
   // ------------------------------------------------------------ 身型
 
