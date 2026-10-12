@@ -52,6 +52,70 @@ interface LimbAxis {
   r: number
 }
 
+/**
+ * 组织沉积方向表。
+ *
+ * **核心原则：增加一个围度 = 往身上加肉。而肉在人身上不是均匀地鼓一圈，
+ * 而是按解剖规律堆在特定方位。**
+ *
+ *   front / back / side 是在截面局部坐标系里的权重 ——
+ *   某个方向权重越大，该处增加同样的围度时鼓得越多。
+ *   dir 表示 +z 为身前、+x 为身体右侧。
+ *
+ * 例：腰围增大主要是腹部脂肪（前向）+ 腰侧赘肉（侧向），背部最少；
+ *     臀围增大是臀部（后向）；小腿围增大是腓肠肌（后向）。
+ *     这些差异正是「同样加 5cm，看起来却是不同的人」的原因。
+ */
+interface Deposition {
+  front: number
+  back: number
+  side: number
+  /** 不随方向变化的基础量，避免形状被扭曲 */
+  base: number
+}
+
+const DEPOSIT: Record<string, Deposition> = {
+  // 腹部脂肪在前、腰侧赘肉在两侧，背部最少
+  waist: { front: 1.7, back: 0.35, side: 1.1, base: 0.2 },
+  // 臀部：后向为主
+  hip: { front: 0.45, back: 1.9, side: 1.0, base: 0.2 },
+  // 女性胸围：乳房组织，几乎全在前向
+  chestF: { front: 2.2, back: 0.1, side: 0.6, base: 0.1 },
+  // 男性胸围：胸肌 + 胸廓，前后较均匀
+  chestM: { front: 1.1, back: 0.7, side: 1.0, base: 0.3 },
+  // 大腿：前后较均匀，略偏内侧
+  thigh: { front: 1.0, back: 1.0, side: 1.15, base: 0.4 },
+  // 小腿：腓肠肌在后
+  calf: { front: 0.45, back: 1.7, side: 0.95, base: 0.25 },
+  // 大臂：肱二头肌在前、肱三头肌在后，侧向少
+  arm: { front: 1.2, back: 1.2, side: 0.7, base: 0.35 },
+  // 前臂：较均匀
+  forearm: { front: 1.0, back: 1.0, side: 1.0, base: 0.5 },
+}
+
+/**
+ * 给定截面内的单位方向 (nx, nz)（nz>0 为身前），算出沉积权重。
+ * 结果用于**在径向位移上做方向调制**，使肉加在正确方位。
+ */
+function depositWeight(d: Deposition, nx: number, nz: number): number {
+  const f = Math.max(0, nz)
+  const b = Math.max(0, -nz)
+  const sd = Math.abs(nx)
+  return d.base + d.front * f * f + d.back * b * b + d.side * sd * sd
+}
+
+/** 该沉积表在整圈上的平均值（用于归一化，保证周长与测量一致） */
+function depositMean(d: Deposition): number {
+  // 对 θ 均匀采样求平均；椭圆截面下已足够精确
+  let sum = 0
+  const N = 48
+  for (let i = 0; i < N; i++) {
+    const th = (i / N) * Math.PI * 2
+    sum += depositWeight(d, Math.sin(th), Math.cos(th))
+  }
+  return sum / N
+}
+
 /** 一个体段：轴 + 参考半径剖面（按 t 等分采样） */
 interface MeshSegment {
   name: string
@@ -107,6 +171,7 @@ export class MeshBody implements BodySurface {
     if (!found) throw new Error('[CDA] OBJ 里没有网格')
     this.mesh = found
     this.geo = this.mesh.geometry
+
     const pos = this.geo.getAttribute('position') as THREE.BufferAttribute
 
     // ── 归一化：按包围盒**中心**平移（不能用 min，那会把中轴推歪），
@@ -390,6 +455,41 @@ export class MeshBody implements BodySurface {
       return torsoGainAtY(LEVELS.crotch + t * (LEVELS.shoulder + 0.03 - LEVELS.crotch))
     }
 
+    // 沉积表的插值：与增益用同一套控制点，两者必须同步过渡
+    const lerpDep = (a: Deposition, b: Deposition, k: number): Deposition => ({
+      front: a.front + (b.front - a.front) * k,
+      back: a.back + (b.back - a.back) * k,
+      side: a.side + (b.side - a.side) * k,
+      base: a.base + (b.base - a.base) * k,
+    })
+    const smoothK = (v: number, a: number, b: number) => {
+      const t2 = Math.min(1, Math.max(0, (v - a) / Math.max(b - a, 1e-6)))
+      return t2 * t2 * (3 - 2 * t2)
+    }
+    /** 躯干在某高度的沉积表：胯→腰→胸 三点平滑过渡 */
+    const torsoDepositAt = (y: number): Deposition => {
+      const dHip = DEPOSIT.hip!
+      const dWaist = DEPOSIT.waist!
+      const dChest = profile.gender === 'male' ? DEPOSIT.chestM! : DEPOSIT.chestF!
+      if (y <= hipY) return dHip
+      if (y <= waistY) return lerpDep(dHip, dWaist, smoothK(y, hipY, waistY))
+      if (y <= chestY) return lerpDep(dWaist, dChest, smoothK(y, waistY, chestY))
+      return dChest
+    }
+    /** 按段名与段内位置取沉积表 */
+    const depositOf = (name: string, t: number, y: number): Deposition | null => {
+      if (name === 'head') return null
+      if (name.startsWith('leg')) {
+        const kLeg = smoothK(t, 0.45, 0.72)
+        return lerpDep(DEPOSIT.thigh!, DEPOSIT.calf!, kLeg)
+      }
+      if (name.startsWith('arm')) {
+        const kArm = smoothK(t, 0.42, 0.72)
+        return lerpDep(DEPOSIT.arm!, DEPOSIT.forearm!, kArm)
+      }
+      return torsoDepositAt(y)
+    }
+
     const pos = this.geo.getAttribute('position') as THREE.BufferAttribute
     const arr = pos.array as Float32Array
     const base = this.base
@@ -442,7 +542,33 @@ export class MeshBody implements BodySurface {
         gBlend += gainOf(scored[k]!.seg.name, scored[k]!.s.t) * (wSum[k]! / total)
       }
       const dom = scored[bestK]!
-      const disp = dom.s.perp.clone().multiplyScalar(gBlend - 1)
+      /*
+       * 方向调制：把径向位移乘上沉积权重，再按整圈均值归一化。
+       *
+       * 归一化是必须的 —— 否则各方向鼓得不一样，实际周长就不再等于
+       * 用户设定的围度。除以均值后，「肉加在该加的地方」与
+       * 「总周长符合测量」两件事同时成立。
+       */
+      const domY = LEVELS.crotch + dom.s.t * (LEVELS.shoulder + 0.03 - LEVELS.crotch)
+      const dep = depositOf(dom.seg.name, dom.s.t, domY)
+      let mod = 1
+      if (dep) {
+        const plen = dom.s.perp.length()
+        if (plen > 1e-9) {
+          // 截面局部坐标系：dir 为轴，fwd 为身前方向，side 为身体右侧
+          const axis = dom.seg.dir
+          const zRef = new THREE.Vector3(0, 0, 1)
+          const fwd = zRef.clone().addScaledVector(axis, -zRef.dot(axis))
+          if (fwd.lengthSq() < 1e-6) fwd.set(1, 0, 0)
+          fwd.normalize()
+          const sideV = new THREE.Vector3().crossVectors(axis, fwd).normalize()
+          const nz = dom.s.perp.dot(fwd) / plen
+          const nx = dom.s.perp.dot(sideV) / plen
+          const mean = depositMean(dep)
+          mod = mean > 1e-6 ? depositWeight(dep, nx, nz) / mean : 1
+        }
+      }
+      const disp = dom.s.perp.clone().multiplyScalar((gBlend - 1) * mod)
       arr[i] = (v.x + disp.x) * heightM
       arr[i + 1] = (v.y + disp.y) * heightM
       arr[i + 2] = (v.z + disp.z) * heightM
