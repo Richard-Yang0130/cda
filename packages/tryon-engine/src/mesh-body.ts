@@ -280,25 +280,77 @@ export class MeshBody implements BodySurface {
     // 躯干增益随高度变化。单独抽出来，是为了让四肢在交界处**与躯干取值一致** ——
     // 这是消除「体段交界处横向条带」的关键：各段增益若在边界上不等，
     // 交界顶点就会跳变，视觉上是一圈台阶（用户看到的凹陷）。
-    const torsoGainAtY = (y: number): number => {
-      const pts: Array<[number, number]> = [
-        [LEVELS.hip, ratio(profile.hipCm, neutral.hipCm)],
-        [LEVELS.waist, ratio(profile.waistCm, neutral.waistCm)],
-        [LEVELS.chest, ratio(profile.chestCm, neutral.chestCm)],
+    const torsoGainAtY = (y: number): number =>
+      smoothSeg(y, [
+        [hipY, ratio(profile.hipCm, neutral.hipCm)],
+        [waistY, ratio(profile.waistCm, neutral.waistCm)],
+        [chestY, ratio(profile.chestCm, neutral.chestCm)],
         // 肩以上回到 1.0：肩宽属骨骼，不该随胸围变
         [LEVELS.shoulder + 0.03, 1],
-      ]
+      ])
+
+    // 四肢在交界处取躯干的增益，再平滑过渡到自身的常数增益
+    /*
+     * 控制高度**从网格自身实测**，不能用写死的男性网格值。
+     *
+     * 原先用 胯0.53/腰0.60/胸0.72（那是一次男性网格实测的结果），
+     * 却同时用于女性网格 —— 两者的腰臀高度并不相同，
+     * 增益落到了错误的高度上。
+     *
+     * 做法：在躯干段的参考半径剖面上找极值 ——
+     * 腰 = 中段的最小半径处，胸/胯 = 其上下两侧的最大半径处。
+     */
+    const tor = this.segments.find((q) => q.name === 'torso')
+    const tRange = LEVELS.shoulder + 0.03 - LEVELS.crotch
+    let hipY = LEVELS.hip
+    let waistY = LEVELS.waist
+    let chestY = LEVELS.chest
+    if (tor && tor.refR.length >= 6) {
+      const rr = tor.refR
+      const n2 = rr.length
+      const yOf = (i: number) => LEVELS.crotch + (i / (n2 - 1)) * tRange
+      // 腰：中段（30%..75%）最小半径
+      let wi = Math.round(n2 * 0.3)
+      for (let i = Math.round(n2 * 0.3); i <= Math.round(n2 * 0.75); i++) {
+        if (rr[i]! < rr[wi]!) wi = i
+      }
+      waistY = yOf(wi)
+      // 胯：腰以下最大；胸：腰以上最大
+      let hi = 0
+      for (let i = 0; i <= wi; i++) if (rr[i]! > rr[hi]!) hi = i
+      let ci = wi
+      for (let i = wi; i < n2; i++) if (rr[i]! > rr[ci]!) ci = i
+      hipY = yOf(hi)
+      chestY = yOf(ci)
+      // 防止退化（例如极瘦体型上极值挤在一起）
+      if (!(hipY < waistY - 0.01 && waistY < chestY - 0.01)) {
+        hipY = LEVELS.hip
+        waistY = LEVELS.waist
+        chestY = LEVELS.chest
+      }
+    }
+
+    // 相邻控制点之间用 smoothstep 而不是线性 ——
+    // 线性插值在每个控制点上**导数突变**，半径剖面上会出现折角，
+    // 视觉上就是「胸腰之间那道断层」。smoothstep 在结点处导数为 0，
+    // 整条曲线 C1 连续，不再有折角。
+    const smoothSeg = (y: number, pts: Array<[number, number]>): number => {
       if (y <= pts[0]![0]) return pts[0]![1]
+      const last = pts[pts.length - 1]!
+      if (y >= last[0]) return last[1]
       for (let i = 0; i < pts.length - 1; i++) {
         const [ya, ga] = pts[i]!
         const [yb, gb] = pts[i + 1]!
-        if (y >= ya && y <= yb) return ga + (gb - ga) * ((y - ya) / (yb - ya))
+        if (y >= ya && y <= yb) {
+          const t2 = (y - ya) / Math.max(yb - ya, 1e-6)
+          const sm = t2 * t2 * (3 - 2 * t2)
+          return ga + (gb - ga) * sm
+        }
       }
-      return 1
+      return last[1]
     }
 
-    // 四肢在交界处取躯干的增益，再平滑过渡到自身的常数增益
-    const gThigh = ratio(profile.thighCircCm, neutral.thighCircCm)
+        const gThigh = ratio(profile.thighCircCm, neutral.thighCircCm)
     const gArm = ratio(profile.upperArmCircCm, neutral.upperArmCircCm)
     const gAtShoulder = torsoGainAtY(LEVELS.shoulder - 0.02)
     const gAtHip = torsoGainAtY(LEVELS.crotch)
