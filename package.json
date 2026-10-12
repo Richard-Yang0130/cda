@@ -1,0 +1,19 @@
+{
+  "name": "cda",
+  "version": "0.1.0",
+  "private": true,
+  "description": "「搭」CDA — 服装穿搭 App 原型",
+  "packageManager": "pnpm@11.7.0",
+  "scripts": {
+    "dev": "pnpm --filter @cda/client dev:h5",
+    "build": "pnpm --filter @cda/client build:h5",
+    "dev:mp": "pnpm --filter @cda/client dev:mp-weixin",
+    "typecheck": "pnpm -r typecheck",
+    "verify": "node scripts/verify.mjs",
+    "flow": "node scripts/flow-test.mjs"
+  },
+  "devDependencies": {
+    "puppeteer-core": "^25.13.0",
+    "typescript": "^5.6.3"
+  }
+}

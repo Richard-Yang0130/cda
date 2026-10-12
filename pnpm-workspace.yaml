@@ -1,0 +1,11 @@
+packages:
+  - 'apps/*'
+  - 'packages/*'
+
+# pnpm 11 默认拦截依赖的构建脚本，需要逐项确认。
+# esbuild 必须允许：它要链接原生二进制，否则 Vite 无法启动。
+# core-js / core-js-pure 的 postinstall 只是打印赞助信息，关掉即可。
+allowBuilds:
+  esbuild: true
+  core-js: false
+  core-js-pure: false
