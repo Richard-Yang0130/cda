@@ -55,7 +55,8 @@ codesign -d --entitlements - "$(which node)" 2>/dev/null | grep disable-library-
 ## 快速开始
 
 ```bash
-export PATH="/Users/harmony/Desktop/dsh2/.tools/node/bin:$PATH"
+# .tools/bin 提供 pnpm 命令包装（见下方说明），必不可少
+export PATH="/Users/harmony/Desktop/dsh2/.tools/bin:/Users/harmony/Desktop/dsh2/.tools/node/bin:$PATH"
 cd /Users/harmony/Desktop/dsh2/cda
 
 # 首次安装依赖。注意：pnpm 11 默认拦截构建脚本，
@@ -259,6 +260,8 @@ CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 | 6 | `chrome --screenshot` 截图里长文本被右边缘**截断**，看起来像布局溢出 | headless Chrome 的 `--window-size` 在 Retina 下 CSS 像素与物理像素不一致，**截图不可信** | 改用 `scripts/verify.mjs`（puppeteer + `setViewport`）——实测滚动宽 == 视口宽，根本没有溢出 |
 | 7 | 交互测试点了「在 3D 人偶上试穿」，结果穿上的是第 4 条建议 | 4 个按钮文案完全相同，脚本取的是**最后一个**匹配 | 明确取第一个匹配 |
 | 8 | 用 `gl.readPixels` 判断 3D 是否变化，得到**假阴性** | SwiftShader 下读回的是陈旧缓冲，即使开了 `preserveDrawingBuffer` | 改用画布**截图的内容哈希**（见 `scripts/flow-test.mjs`） |
+| 9 | `pnpm -r typecheck` 报 `Could not find a declaration file for module 'three'` | **three 0.186 不自带 `.d.ts`**（包里 0 个类型文件） | 装 `@types/three`；客户端另需 `@types/node` 与 `vite/client` 引用 |
+| 10 | `pnpm build` 报 `pnpm: command not found` | 一直用 `node pnpm.mjs` 跑，PATH 里没有 `pnpm` 命令，而 package.json 的 script 里写的是 `pnpm ...` | 见下方「pnpm 包装脚本」 |
 
 > **教训**：第 6 条让我基于假象改了两轮 CSS。定位布局问题必须先**测量**再改，
 > 不要靠看截图猜。`scripts/verify.mjs` 会直接列出越界元素的标签、宽度与文本：
@@ -266,6 +269,44 @@ CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 > ```bash
 > pnpm verify "http://127.0.0.1:5173/#/pages/outfit/outfit" /tmp/shot.png
 > ```
+
+---
+
+## pnpm 包装脚本（脚本能跑的前提）
+
+DSH 自带的 pnpm 只是一个 `pnpm.mjs`，PATH 里没有 `pnpm` 命令。
+所以 `package.json` 里任何写成 `pnpm --filter ...` 的 script 都会失败。
+建一个包装脚本即可（已建好，无需重复）：
+
+```bash
+mkdir -p /Users/harmony/Desktop/dsh2/.tools/bin
+cat > /Users/harmony/Desktop/dsh2/.tools/bin/pnpm <<'EOF'
+#!/bin/sh
+exec /Users/harmony/Desktop/dsh2/.tools/node/bin/node \
+     /Users/harmony/.dsh/dsh-runtimes/dsh-primary-runtime/dependencies/pnpm/bin/pnpm.mjs "$@"
+EOF
+chmod +x /Users/harmony/Desktop/dsh2/.tools/bin/pnpm
+```
+
+完整 PATH：
+
+```bash
+export PATH="/Users/harmony/Desktop/dsh2/.tools/bin:/Users/harmony/Desktop/dsh2/.tools/node/bin:$PATH"
+```
+
+---
+
+## 质量关卡
+
+提交前应当全绿：
+
+```bash
+pnpm -r typecheck    # 三个包全部类型检查通过
+pnpm build           # H5 生产构建，产物在 apps/client/dist/build/h5
+```
+
+生产版本已实测：`pnpm verify` 与 `pnpm flow` 对**生产构建**同样通过，
+且画布哈希与 dev 完全一致（`7f10c4c0…` → `bfaf28b6…`），说明生产与开发行为一致。
 
 > 排查建议：遇到「页面没变化」时，先看浏览器控制台有没有**未捕获异常**。
 > 第 3 条的异常发生在一个 `setTimeout` 里，页面表面正常，极易被误判为「渲染没更新」。
