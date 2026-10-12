@@ -94,7 +94,10 @@ export class MeshBody {
       base[i * 3 + 1] = (pos.getY(i) - box.min.y) / rawH
       base[i * 3 + 2] = pos.getZ(i) / rawH
     }
-    this.base = poseArmsDown(base)
+    // 姿势（A 字站姿 → 双手自然下垂）在**离线**由 scripts/bake-pose.py 烘焙进 OBJ。
+    // 不在运行时做：这是一个一次性的资产变换，放运行时既增加开销，
+    // 又因为看不到中间数据而极难调试（先前在这里反复出错）。
+    this.base = base
 
     this.trunk = this.measureTrunk(this.base)
     this.legAxisR = this.measureLeg(this.base, 1)
@@ -354,70 +357,3 @@ export class MeshBody {
  * 另外目标不是完全垂直，而是**离垂直线约 8°**：
  * 完全垂直会让上臂压进躯干，视觉上像粘住了。
  */
-function poseArmsDown(base: Float32Array): Float32Array {
-  const out = Float32Array.from(base)
-  const n = out.length / 3
-
-  // 肩关节高度（略低于肩顶）与躯干半宽
-  const shoulderY = LEVELS.shoulder - 0.02
-
-  for (const side of [1, -1] as const) {
-    // 躯干在肩高处的半宽
-    const trunkR: number[] = []
-    for (let i = 0; i < n; i++) {
-      const y = base[i * 3 + 1]!
-      if (Math.abs(y - shoulderY) > 0.02) continue
-      if (Math.abs(base[i * 3]!) > 0.13) continue
-      trunkR.push(Math.abs(base[i * 3]!))
-    }
-    trunkR.sort((a, b) => a - b)
-    const halfW = trunkR.length ? trunkR[trunkR.length >> 1]! : 0.1
-    const joint = new THREE.Vector3(side * halfW * 0.8, shoulderY, 0)
-
-    // 手部质心 → 当前上臂方向
-    const hand = new THREE.Vector3()
-    let hn = 0
-    for (let i = 0; i < n; i++) {
-      const x = base[i * 3]!
-      const y = base[i * 3 + 1]!
-      if (Math.sign(x) !== side) continue
-      if (Math.abs(x) < 0.2 || y > 0.65) continue
-      hand.x += x
-      hand.y += y
-      hand.z += base[i * 3 + 2]!
-      hn++
-    }
-    if (!hn) continue
-    hand.divideScalar(hn)
-
-    const from = hand.clone().sub(joint).normalize()
-    // 目标：离垂直线约 8°（向外），避免上臂压进躯干
-    const target = new THREE.Vector3(side * Math.sin(THREE.MathUtils.degToRad(8)), -Math.cos(THREE.MathUtils.degToRad(8)), 0)
-    const full = new THREE.Quaternion().setFromUnitVectors(from, target)
-
-    const v = new THREE.Vector3()
-    const q = new THREE.Quaternion()
-    const id = new THREE.Quaternion()
-    for (let i = 0; i < n; i++) {
-      const x = base[i * 3]!
-      const y = base[i * 3 + 1]!
-      // 只处理该侧、且明显属于手臂的顶点
-      if (Math.sign(x) !== side || Math.abs(x) < 0.1) continue
-      // ⚠️ 必须排除裆以下。只看 |x| 会把**腿**也当成手臂 ——
-      // 腿离肩关节很远，套上旋转后被甩到几倍身宽之外，
-      // 渲染出来是一大片放射状扇形。
-      if (y < LEVELS.crotch - 0.02) continue
-      v.set(x, y, base[i * 3 + 2]!)
-      const d = v.distanceTo(joint)
-      // 肩附近不转（否则腋下撕裂）；超过臂长后衰减到零（把腿和杂物排除干净）
-      const t = THREE.MathUtils.smoothstep(d, 0.02, 0.12) * (1 - THREE.MathUtils.smoothstep(d, 0.36, 0.48))
-      if (t <= 0) continue
-      q.copy(id).slerp(full, t)
-      v.sub(joint).applyQuaternion(q).add(joint)
-      out[i * 3] = v.x
-      out[i * 3 + 1] = v.y
-      out[i * 3 + 2] = v.z
-    }
-  }
-  return out
-}
