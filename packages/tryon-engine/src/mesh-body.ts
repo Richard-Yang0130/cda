@@ -119,10 +119,19 @@ function depositMean(d: Deposition): number {
 /** 一个体段：轴 + 参考半径剖面（按 t 等分采样） */
 interface MeshSegment {
   name: string
+  /** **目标**轴（每次 setProfile 按骨骼参数重算）。全程归一化单位 */
   a: THREE.Vector3
   b: THREE.Vector3
   len: number
   dir: THREE.Vector3
+  /** **参考**轴（网格自身的，永不改变）。顶点的参数化一律基于它 */
+  refA: THREE.Vector3
+  refDir: THREE.Vector3
+  refLen: number
+  /** 该段由哪些骨骼参数驱动长度；比值缩放，中性时 = 1 */
+  bone: 'torso' | 'head' | 'arm' | 'leg'
+  /** 左右侧（0 = 居中），肩宽用它决定轴起点的 x */
+  side: 0 | 1 | -1
   /** 沿段的参考半径采样，长度固定 */
   refR: number[]
 }
@@ -254,27 +263,25 @@ export class MeshBody implements BodySurface {
     const neckY = LEVELS.shoulder + 0.03
     const headTopY = 1.0
 
-    const defs: Array<{ name: string; a: THREE.Vector3; b: THREE.Vector3 }> = []
+    const defs: Array<{
+      name: string
+      a: THREE.Vector3
+      b: THREE.Vector3
+      bone: MeshSegment['bone']
+      side: 0 | 1 | -1
+    }> = []
     // 躯干：裆 → 颈根（竖直）
-    defs.push({
-      name: 'torso',
-      a: new THREE.Vector3(0, crotchY, 0),
-      b: new THREE.Vector3(0, neckY, 0),
-    })
-    // 头颈：只随身高缩放，不参与围度
-    defs.push({
-      name: 'head',
-      a: new THREE.Vector3(0, neckY, 0),
-      b: new THREE.Vector3(0, headTopY, 0),
-    })
+    defs.push({ name: 'torso', a: new THREE.Vector3(0, crotchY, 0), b: new THREE.Vector3(0, neckY, 0), bone: 'torso', side: 0 })
+    // 头颈：由颈长驱动
+    defs.push({ name: 'head', a: new THREE.Vector3(0, neckY, 0), b: new THREE.Vector3(0, headTopY, 0), bone: 'head', side: 0 })
     for (const side of [1, -1] as const) {
       const sh = at(shoulderY, (v) => Math.sign(v.x) === side && Math.abs(v.x) > 0.09)
       const wr = at(0.57, (v) => Math.sign(v.x) === side && Math.abs(v.x) > 0.2)
       const hip = at(crotchY - 0.03, (v) => Math.sign(v.x) === side)
       const an = at(LEVELS.ankle + 0.01, (v) => Math.sign(v.x) === side)
       const sgn = side > 0 ? 'R' : 'L'
-      if (sh && wr) defs.push({ name: `arm${sgn}`, a: sh, b: wr })
-      if (hip && an) defs.push({ name: `leg${sgn}`, a: hip, b: an })
+      if (sh && wr) defs.push({ name: `arm${sgn}`, a: sh, b: wr, bone: 'arm', side })
+      if (hip && an) defs.push({ name: `leg${sgn}`, a: hip, b: an, bone: 'leg', side })
     }
 
     // 分段量半径剖面（先按**原始距离**粗分，够用：各段轴本来就穿过各自的肢体）
@@ -301,10 +308,15 @@ export class MeshBody implements BodySurface {
       })
       this.segments.push({
         name: d.name,
-        a: d.a,
-        b: d.b,
+        a: d.a.clone(),
+        b: d.b.clone(),
         len,
         dir,
+        refA: d.a.clone(),
+        refDir: dir.clone(),
+        refLen: len,
+        bone: d.bone,
+        side: d.side,
         refR,
       })
     }
@@ -319,14 +331,17 @@ export class MeshBody implements BodySurface {
    *               0.15/0.18 = 0.83（在躯干表面之内）
    *   → 归躯干，正确。原始距离比较会把它判成手臂。
    */
-  private segScore(seg: MeshSegment, v: THREE.Vector3): { score: number; t: number; perp: THREE.Vector3 } {
-    const rel = new THREE.Vector3().subVectors(v, seg.a)
-    const proj = rel.dot(seg.dir)
-    const t = Math.min(1, Math.max(0, proj / Math.max(seg.len, 1e-6)))
-    const perp = rel.clone().addScaledVector(seg.dir, -proj)
+  private segScore(seg: MeshSegment, v: THREE.Vector3): { score: number; t: number; tRaw: number; perp: THREE.Vector3 } {
+    // 参数化一律基于**参考轴** —— 目标轴会随骨骼参数移动，
+    // 用它算 t 会让同一顶点在不同骨骼设置下对应到不同位置，产生漂移。
+    const rel = new THREE.Vector3().subVectors(v, seg.refA)
+    const proj = rel.dot(seg.refDir)
+    const tRaw = proj / Math.max(seg.refLen, 1e-6)
+    const t = Math.min(1, Math.max(0, tRaw))
+    const perp = rel.clone().addScaledVector(seg.refDir, -proj)
     const idx = Math.round(t * (seg.refR.length - 1))
     const r = seg.refR[idx] || 1e-4
-    return { score: perp.length() / Math.max(r, 1e-4), t, perp }
+    return { score: perp.length() / Math.max(r, 1e-4), t, tRaw, perp }
   }
 
   setProfile(profile: BodyProfile): void {
@@ -490,6 +505,49 @@ export class MeshBody implements BodySurface {
       return torsoDepositAt(y)
     }
 
+    /*
+     * ── 按骨骼参数重算各段的目标轴 ──
+     *
+     * 至此骨骼参数（肩宽 / 各段长度 / 颈长）才真正参与进来 ——
+     * 此前它们是完全没被使用的死参数，拖动毫无反应。
+     *
+     * 一律用**比值**缩放（中性档案时比值 = 1，网格原样不动），
+     * 并全程保持归一化单位，身高缩放留到最后统一乘。
+     */
+    const neckDelta = (profile.neckLengthCm - neutral.neckLengthCm) / 100 / heightM
+    const boneScale = (seg: MeshSegment): number => {
+      switch (seg.bone) {
+        case 'arm':
+          return (profile.upperArmCm + profile.forearmCm) / (neutral.upperArmCm + neutral.forearmCm)
+        case 'leg':
+          return (profile.thighCm + profile.calfCm) / (neutral.thighCm + neutral.calfCm)
+        case 'torso':
+          return profile.torsoLengthCm / neutral.torsoLengthCm
+        case 'head':
+          return 1
+      }
+    }
+    for (const seg of this.segments) {
+      const a = seg.refA.clone()
+      let len = seg.refLen * boneScale(seg)
+      if (seg.bone === 'arm' && seg.side !== 0) {
+        // 肩宽驱动手臂轴的起点（与 buildSkeleton 的 0.86 系数保持一致）
+        a.x = (seg.side * (profile.shoulderWidthCm / 200) * 0.86) / heightM
+      }
+      if (seg.bone === 'head') {
+        // 颈长是「把头顶往上推」，不是把头放大 —— 所以只平移、不缩放
+        a.y = seg.refA.y + neckDelta
+      }
+      if (seg.bone === 'torso') {
+        // 躯干要额外接上颈部的位移，否则头与躯干之间会裂开
+        len += neckDelta
+      }
+      seg.a = a
+      seg.len = Math.max(len, 1e-4)
+      seg.dir = seg.refDir.clone()
+      seg.b = a.clone().addScaledVector(seg.dir, seg.len)
+    }
+
     const pos = this.geo.getAttribute('position') as THREE.BufferAttribute
     const arr = pos.array as Float32Array
     const base = this.base
@@ -568,10 +626,15 @@ export class MeshBody implements BodySurface {
           mod = mean > 1e-6 ? depositWeight(dep, nx, nz) / mean : 1
         }
       }
-      const disp = dom.s.perp.clone().multiplyScalar((gBlend - 1) * mod)
-      arr[i] = (v.x + disp.x) * heightM
-      arr[i + 1] = (v.y + disp.y) * heightM
-      arr[i + 2] = (v.z + disp.z) * heightM
+      // 从**目标轴**重建位置：轴心按段内参数 t 沿目标轴走，
+      // 垂距按增益与沉积方向缩放。
+      // 这样骨骼参数一变（例如小臂拉长），手腕与手会跟着外移。
+      const axisPoint = dom.seg.a.clone().addScaledVector(dom.seg.dir, dom.s.tRaw * dom.seg.len)
+      const p = dom.s.perp.clone().multiplyScalar(1 + (gBlend - 1) * mod)
+      axisPoint.add(p)
+      arr[i] = axisPoint.x * heightM
+      arr[i + 1] = axisPoint.y * heightM
+      arr[i + 2] = axisPoint.z * heightM
     }
 
     pos.needsUpdate = true
