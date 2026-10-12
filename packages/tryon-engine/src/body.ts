@@ -154,12 +154,15 @@ export function buildSkeleton(profile: BodyProfile): BodySkeleton {
     const elbow: Vec3 = [elbowX, root[1] - Math.cos(armTilt) * upperLen, 0.012 * upperLen]
     const wristX = elbowX + side * Math.sin(armTilt * 0.7) * foreLen
     const wrist: Vec3 = [wristX, elbow[1] - Math.cos(armTilt * 0.7) * foreLen, elbow[2] + 0.01]
-    const rMid = upperArmR * 0.82
+    // 半径系数必须让**上臂中段真正达到实测围度**。
+    // 原先 rRoot 0.92 / rMid 0.82，等于系统性地比实测细一成 ——
+    // 这正是「手臂太细」的直接来源。
+    const rMid = upperArmR * 0.92
     return {
       side, root, mid: elbow, end: wrist,
-      rRoot: upperArmR * 0.92,
+      rRoot: upperArmR * 1.02,
       rMid,
-      rEnd: upperArmR * 0.6,
+      rEnd: upperArmR * 0.62,
     }
   })
 
@@ -173,9 +176,10 @@ export function buildSkeleton(profile: BodyProfile): BodySkeleton {
     return {
       side, root, mid: knee, end: ankle,
       rRoot: thighR * 1.0,
-      // 膝盖直径约 10cm，取 0.6 倍大腿半径；取太小腿会显得细弱
-      rMid: thighR * 0.6,
-      rEnd: thighR * 0.34,
+      // 膝盖约 0.64 倍大腿半径、脚踝约 0.40 —— 按实际人体测量取，
+      // 原先的 0.6 / 0.34 让小腿偏细
+      rMid: thighR * 0.64,
+      rEnd: thighR * 0.4,
     }
   })
 
@@ -380,7 +384,7 @@ function buildBlobs(s: BodySkeleton): SdfBlob[] {
     // 腘绳肌：**后侧**
     blobs.push(muscleBelly(leg.root, leg.mid, 0.42, R * mu * 0.9, thighLen * 0.3, 0, 0, -R * 0.36))
     // 腓肠肌：小腿**后侧偏上** —— 这就是小腿肚
-    blobs.push(muscleBelly(leg.mid, leg.end, 0.26, leg.rMid * mu * 0.95, calfLen * 0.26, 0, 0, -leg.rMid * 0.4))
+    blobs.push(muscleBelly(leg.mid, leg.end, 0.26, leg.rMid * mu * 1.06, calfLen * 0.26, 0, 0, -leg.rMid * 0.4))
     // 大腿脂肪：外侧 + 内侧
     if (ff > 0.5) {
       blobs.push(muscleBelly(leg.root, leg.mid, 0.4, R * 0.34 * ff, thighLen * 0.34, -leg.side * R * 0.45, 0, 0))

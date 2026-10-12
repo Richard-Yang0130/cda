@@ -39,6 +39,10 @@ export const WHR_LIMIT = { male: 0.9, female: 0.85 } as const
  * 四个锚点的**斜率差异**就是脂肪分布特征：
  *   女性偏臀腿（gynoid），男性偏腹部（android）——
  *   所以男性 waist 斜率更大、女性 hip/thigh 斜率更大。
+ *
+ * ⚠️ 四肢斜率曾经只有真实值的一半（男性上肢 0.55 vs 真实 0.9–1.1 cm/BMI），
+ * 结果是「体重涨了，体积全堆在躯干和臀腿，手臂小腿却几乎不变」。
+ * 现已按实际人体测量调到接近真实斜率。
  */
 interface Anchor {
   /** 体脂水平 0..1 */
@@ -53,18 +57,18 @@ interface Anchor {
 
 /** 基准身高下的女性锚点（165cm） */
 const FEMALE_ANCHORS: Anchor[] = [
-  { f: 0.0, bmi: 18.5, chest: 80, waist: 62, hip: 87, thigh: 48, arm: 24 },
-  { f: 0.35, bmi: 24.3, chest: 88, waist: 71, hip: 94, thigh: 53, arm: 27 },
-  { f: 0.7, bmi: 30.1, chest: 97, waist: 84, hip: 103, thigh: 60, arm: 31 },
-  { f: 1.0, bmi: 35.0, chest: 104, waist: 95, hip: 110, thigh: 66, arm: 34 },
+  { f: 0.0, bmi: 18.5, chest: 80, waist: 62, hip: 87, thigh: 50, arm: 25 },
+  { f: 0.35, bmi: 24.3, chest: 88, waist: 71, hip: 94, thigh: 56, arm: 29 },
+  { f: 0.7, bmi: 30.1, chest: 97, waist: 84, hip: 103, thigh: 62, arm: 33 },
+  { f: 1.0, bmi: 35.0, chest: 104, waist: 95, hip: 110, thigh: 67, arm: 36 },
 ]
 
 /** 基准身高下的男性锚点（176cm） */
 const MALE_ANCHORS: Anchor[] = [
-  { f: 0.0, bmi: 18.5, chest: 88, waist: 72, hip: 88, thigh: 50, arm: 27 },
-  { f: 0.35, bmi: 24.3, chest: 98, waist: 84, hip: 95, thigh: 55, arm: 31 },
-  { f: 0.7, bmi: 30.1, chest: 108, waist: 97, hip: 102, thigh: 60, arm: 34 },
-  { f: 1.0, bmi: 35.0, chest: 115, waist: 108, hip: 108, thigh: 64, arm: 36 },
+  { f: 0.0, bmi: 18.5, chest: 88, waist: 72, hip: 88, thigh: 52, arm: 28 },
+  { f: 0.35, bmi: 24.3, chest: 98, waist: 84, hip: 95, thigh: 58, arm: 32 },
+  { f: 0.7, bmi: 30.1, chest: 108, waist: 97, hip: 102, thigh: 63, arm: 36 },
+  { f: 1.0, bmi: 35.0, chest: 115, waist: 108, hip: 108, thigh: 68, arm: 40 },
 ]
 
 const REF_HEIGHT = { female: 165, male: 176 } as const
