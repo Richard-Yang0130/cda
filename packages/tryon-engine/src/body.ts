@@ -20,7 +20,7 @@ import * as THREE from 'three'
 import type { BodyProfile, Gender } from '@cda/core'
 import { findBuild, type BodyBuild } from '@cda/core'
 import { polygonize } from './surface-nets'
-import { blobsBounds, compileSdf, type SdfBlob, type Vec3 } from './sdf'
+import { blobsBounds, compileSdf, raySurface, type SdfBlob, type Vec3 } from './sdf'
 
 // ────────────────────────────────────────────────────────────
 // 几何辅助
@@ -422,12 +422,163 @@ export interface BodyModel {
   bounds: { min: Vec3; max: Vec3 }
 }
 
+
+// ────────────────────────────────────────────────────────────
+// 解剖细节
+// ────────────────────────────────────────────────────────────
+
+type SdfFn = (x: number, y: number, z: number) => number
+
+/** 把一个解剖点投影到当前体表。inset<0 表示切入体内，>0 表示浮出体表 */
+function onSurface(sdf: SdfFn, from: Vec3, dir: Vec3, inset = 0): [number, number, number] {
+  const len = Math.hypot(dir[0], dir[1], dir[2]) || 1
+  const dx = dir[0] / len
+  const dy = dir[1] / len
+  const dz = dir[2] / len
+  const hit = raySurface(sdf, from[0], from[1], from[2], dx, dy, dz, 0.6)
+  const t = (hit ?? 0.12) + inset
+  return [from[0] + dx * t, from[1] + dy * t, from[2] + dz * t]
+}
+
+/**
+ * 解剖细节层。
+ *
+ * 人体表面的「精细度」大半来自两类结构：
+ *   **加性** —— 皮下骨顶出来的棱与隆起（锁骨、肩胛冈、髌骨、内外踝、鹰嘴）
+ *   **减性** —— 肌间沟与窝（三角肌胸大肌沟、腹直肌外侧缘、股四头肌纵沟、
+ *              腘窝、肚脐、胸骨上窝）
+ *
+ * 纯并集的 SDF 永远是光滑气球，缺的正是这一层。
+ *
+ * ⚠️ 关键几何：给定期望的**凹陷深度**与**半径**，减法球心必须埋在
+ * `半径 − 深度` 处。
+ *   埋浅了（甚至为正在体表外）→ 挖出一个深碗而不是浅沟；
+ *   埋深了（r < 埋深）→ 球整个在肉里，**根本挖不到**。
+ * 这两个错误同时出现过，出来的人偶像被打了一身洞。
+ *
+ * 所有点位都用射线**投影到当前体表**，所以体型一变细节会跟着走。
+ */
+function buildAnatomicalDetails(s: BodySkeleton, baseSdf: SdfFn): { adds: SdfBlob[]; subs: SdfBlob[] } {
+  const adds: SdfBlob[] = []
+  const subs: SdfBlob[] = []
+  const span = s.shoulderY - s.hipY
+
+  /** 凸起：给定期望高度与半径 */
+  const bump = (from: Vec3, dir: Vec3, radius: number, height: number) =>
+    onSurface(baseSdf, from, dir, -(radius - height))
+  /** 凹陷：给定期望深度与半径 */
+  const groove = (from: Vec3, dir: Vec3, radius: number, depth: number) =>
+    onSurface(baseSdf, from, dir, -(radius - depth))
+
+  // ── 锁骨：皮下骨，胸前一条棱 ──
+  const clavY = s.shoulderY + span * 0.015
+  const clavInner = bump([0, clavY, 0], [0, 0.35, 1], 0.011, 0.004)
+  const clavOuter = bump([0, clavY - span * 0.015, 0], [0.85, 0.1, 0.5], 0.011, 0.004)
+  for (const side of [-1, 1] as const) {
+    adds.push({ kind: 'capsule', a: clavInner, b: [side * clavOuter[0], clavOuter[1], clavOuter[2]], r: 0.009 })
+  }
+  // 胸骨上窝
+  subs.push({ kind: 'sphere', c: groove([0, clavY + span * 0.01, 0], [0, 0.25, 1], 0.018, 0.005), r: 0.018 })
+
+  // ── 三角肌–胸大肌沟 ──
+  const dpTop = groove([0, s.chestY + span * 0.1, 0], [0.5, 0.2, 0.85], 0.013, 0.004)
+  const dpBottom = groove([0, s.chestY - span * 0.06, 0], [0.8, -0.15, 0.55], 0.013, 0.004)
+  for (const side of [-1, 1] as const) {
+    subs.push({ kind: 'capsule', a: [side * dpTop[0], dpTop[1], dpTop[2]], b: [side * dpBottom[0], dpBottom[1], dpBottom[2]], r: 0.013 })
+  }
+
+  // ── 肩胛冈：背后横向骨棱 ──
+  const scapY = s.chestY + span * 0.1
+  const scapInner = bump([0, scapY, 0], [0, 0, -1], 0.012, 0.003)
+  const scapOuter = bump([0, scapY - span * 0.02, 0], [0.7, 0, -0.72], 0.012, 0.003)
+  for (const side of [-1, 1] as const) {
+    adds.push({
+      kind: 'capsule',
+      a: [side * scapInner[0] * 0.3, scapInner[1], scapInner[2]],
+      b: [side * scapOuter[0], scapOuter[1], scapOuter[2]],
+      r: 0.009,
+    })
+  }
+
+  // ── 肚脐 ──
+  subs.push({ kind: 'sphere', c: groove([0, s.waistY - span * 0.03, 0], [0, -0.1, 1], 0.012, 0.005), r: 0.012 })
+
+  // ── 腹直肌外侧缘：腹部两条纵沟 ──
+  const abTop = groove([0, s.chestY - span * 0.12, 0], [0.45, 0, 0.9], 0.011, 0.003)
+  const abBottom = groove([0, s.hipY + span * 0.12, 0], [0.45, 0, 0.9], 0.011, 0.003)
+  for (const side of [-1, 1] as const) {
+    subs.push({
+      kind: 'capsule',
+      a: [side * abTop[0], abTop[1], abTop[2]],
+      b: [side * abBottom[0], abBottom[1], abBottom[2]],
+      r: 0.011,
+    })
+  }
+
+  // ── 上肢 ──
+  for (const arm of s.arms) {
+    // 肱二头肌与肱三头肌之间：**沿臂走向的长沟**，不是一个点。
+    // 早先用孤立的球，出来是一颗颗坑。
+    const gTopY = arm.root[1] - span * 0.02
+    const gBottomY = arm.mid[1] + span * 0.02
+    for (const sign of [-1, 1] as const) {
+      subs.push({
+        kind: 'capsule',
+        a: groove([arm.root[0], gTopY, 0], [sign * arm.side, 0, -0.3], 0.01, 0.0025),
+        b: groove([arm.mid[0], gBottomY, 0], [sign * arm.side, 0, -0.3], 0.01, 0.0025),
+        r: 0.01,
+      })
+    }
+    // 鹰嘴（肘后骨突）
+    adds.push({ kind: 'sphere', c: bump([arm.mid[0], arm.mid[1], 0], [0, -0.15, -1], 0.014, 0.004), r: 0.014 })
+    // 肘窝
+    subs.push({ kind: 'sphere', c: groove([arm.mid[0], arm.mid[1] - 0.012, 0], [0, 0, 1], 0.016, 0.004), r: 0.016 })
+  }
+
+  // ── 下肢 ──
+  for (const leg of s.legs) {
+    // 髌骨
+    adds.push({
+      kind: 'ellipsoid',
+      c: bump([leg.mid[0], leg.mid[1] + span * 0.012, 0], [0, 0, 1], 0.03, 0.006),
+      r: [0.024, 0.03, 0.024],
+    })
+    // 腘窝
+    subs.push({ kind: 'sphere', c: groove([leg.mid[0], leg.mid[1] - span * 0.01, 0], [0, 0, -1], 0.026, 0.005), r: 0.026 })
+    // 内踝 / 外踝
+    for (const sign of [-1, 1] as const) {
+      adds.push({ kind: 'sphere', c: bump([leg.end[0], leg.end[1] + 0.016, 0], [sign, 0, 0], 0.014, 0.005), r: 0.014 })
+    }
+    // 股四头肌中间纵沟
+    subs.push({
+      kind: 'capsule',
+      a: groove([leg.root[0], leg.root[1] - span * 0.06, 0], [0, 0, 1], 0.011, 0.003),
+      b: groove([leg.mid[0], leg.mid[1] + span * 0.06, 0], [0, 0, 1], 0.011, 0.003),
+      r: 0.011,
+    })
+  }
+
+  return { adds, subs }
+}
+
+// ────────────────────────────────────────────────────────────
+// 身体模型
+// ────────────────────────────────────────────────────────────
+
 export function createBodyModel(profile: BodyProfile): BodyModel {
   const skeleton = buildSkeleton(profile)
   const blobs = buildBlobs(skeleton)
   // 平滑系数：偏小则肉块交界处会露出硬棱，偏大则会把交界「吹胖」——
   // 胯部那圈裙边感就是吹胖造成的，所以取偏小的 0.02。
-  const sdf = compileSdf(blobs, 0.02)
+  const K = 0.02
+
+  // 两遍编译：先用基础形体求出体表，才能把解剖细节**投影**到正确位置。
+  // 否则细节是死的坐标，体型一变就飘出体外或埋进肉里。
+  const baseSdf = compileSdf(blobs, K)
+  const details = buildAnatomicalDetails(skeleton, baseSdf)
+
+  // 挖沟用更小的平滑系数：沟要清晰，糊了就看不出结构
+  const sdf = compileSdf([...blobs, ...details.adds], K, details.subs, 0.016)
 
   const surfaceRadius: BodyModel['surfaceRadius'] = (ox, oy, oz, dx, dy, dz, maxDist) => {
     if (sdf(ox, oy, oz) > 0) return null // 起点已在体外，无法内往外找
@@ -452,7 +603,14 @@ export function createBodyModel(profile: BodyProfile): BodyModel {
     return null
   }
 
-  return { profile, skeleton, blobs, sdf, surfaceRadius, bounds: blobsBounds(blobs) }
+  return {
+    profile,
+    skeleton,
+    blobs: [...blobs, ...details.adds],
+    sdf,
+    surfaceRadius,
+    bounds: blobsBounds([...blobs, ...details.adds]),
+  }
 }
 
 // ────────────────────────────────────────────────────────────

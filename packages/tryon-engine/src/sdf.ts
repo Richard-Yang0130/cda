@@ -21,6 +21,17 @@ export function smax(a: number, b: number, k: number): number {
   return -smin(-a, -b, k)
 }
 
+/**
+ * 平滑减法：从 a 中挖掉 b。
+ *
+ * 这是做出肌间沟、肚脐、锁骨上窝的唯一手段 ——
+ * 人体表面的「细节」大半不是凸起，而是**凹陷**。
+ * 纯并集的模型无论怎么调都是光滑的气球，就是缺了这一层。
+ */
+export function ssub(a: number, b: number, k: number): number {
+  return -smin(-a, b, k)
+}
+
 /** 球 */
 export function sdSphere(
   px: number, py: number, pz: number,
@@ -233,8 +244,14 @@ function boundingOf(blob: SdfBlob): { cx: number; cy: number; cz: number; R: num
  * 就可以整个跳过它的求值。这让求值开销从「全部肉块」降到「邻近几块」，
  * 是能在手机上做实时预览的原因。
  */
-export function compileSdf(blobs: SdfBlob[], k: number): (x: number, y: number, z: number) => number {
+export function compileSdf(
+  blobs: SdfBlob[],
+  k: number,
+  subtractions: SdfBlob[] = [],
+  kSub = k,
+): (x: number, y: number, z: number) => number {
   const meta = blobs.map((blob) => ({ blob, ...boundingOf(blob) }))
+  const subMeta = subtractions.map((blob) => ({ blob, ...boundingOf(blob) }))
 
   return (x: number, y: number, z: number): number => {
     let d = Infinity
@@ -247,8 +264,52 @@ export function compileSdf(blobs: SdfBlob[], k: number): (x: number, y: number, 
       if (reach > d + k) continue
       d = smin(d, evalBlob(m.blob, x, y, z), k)
     }
+
+    // 挖沟。只有当凹槽可能影响当前位置时才求值。
+    for (let i = 0; i < subMeta.length; i++) {
+      const m = subMeta[i]!
+      const dx = x - m.cx
+      const dy = y - m.cy
+      const dz = z - m.cz
+      const reach = Math.sqrt(dx * dx + dy * dy + dz * dz) - m.R
+      if (reach > -d + kSub) continue
+      d = ssub(d, evalBlob(m.blob, x, y, z), kSub)
+    }
+
     return d
   }
+}
+
+/**
+ * 从体内一点沿方向找体表距离（球体步进 + 二分细化）。
+ * 用于把解剖细节**投影到当前体型的外表面** ——
+ * 否则体型一变，锁骨、肚脐这些细节就会飘到体外或埋进肉里。
+ */
+export function raySurface(
+  sdf: (x: number, y: number, z: number) => number,
+  ox: number, oy: number, oz: number,
+  dx: number, dy: number, dz: number,
+  maxDist: number,
+): number | null {
+  if (sdf(ox, oy, oz) > 0) return null
+  const steps = 56
+  const dt = maxDist / steps
+  let prevT = 0
+  for (let i = 1; i <= steps; i++) {
+    const t = i * dt
+    if (sdf(ox + dx * t, oy + dy * t, oz + dz * t) >= 0) {
+      let lo = prevT
+      let hi = t
+      for (let k = 0; k < 12; k++) {
+        const mid = (lo + hi) / 2
+        if (sdf(ox + dx * mid, oy + dy * mid, oz + dz * mid) < 0) lo = mid
+        else hi = mid
+      }
+      return (lo + hi) / 2
+    }
+    prevT = t
+  }
+  return null
 }
 
 /** 全部肉块的合并包围盒，用于确定采样网格范围 */
