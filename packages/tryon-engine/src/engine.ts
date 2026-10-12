@@ -21,6 +21,7 @@ import {
   type MannequinQuality,
 } from './body'
 import { createGarment, type Garment } from './garment'
+import { MeshBody } from './mesh-body'
 import type { CanvasLike, RendererLike, TryonPlatform } from './platform'
 
 export interface TryonEngineOptions {
@@ -43,6 +44,13 @@ export class TryonEngine {
   private readonly world: THREE.Group
 
   private mannequin: THREE.Group | null = null
+  /**
+   * 雕刻网格人体。非空时**取代** SDF 人台。
+   *
+   * SDF 模型仍然保留（`this.model`），因为服装壳的射线求交依赖它 ——
+   * 两者由同一份身型数据驱动，所以大致对齐。
+   */
+  private meshBody: MeshBody | null = null
   /** 脚下假阴影。用程序化纹理而非 shadowMap，移动端更省 */
   private groundShadow: THREE.Mesh | null = null
   /**
@@ -145,6 +153,20 @@ export class TryonEngine {
    * preview 会显著提高体素边长 —— 拖动滑杆时用它保持跟手。
    */
   private rebuildMannequin(quality: MannequinQuality = 'final'): void {
+    // 用雕刻网格时不必重建 SDF 人台 —— 改体型从约 200ms 降到几毫秒
+    if (this.meshBody) {
+      this.meshBody.setProfile(this.model.profile)
+      this.meshBody.object3D.visible = true
+      if (this.mannequin) this.mannequin.visible = false
+      const H0 = this.model.skeleton.height
+      if (this.groundShadow) {
+        const s0 = H0 / 1.68
+        this.groundShadow.position.y = 0.004
+        this.groundShadow.scale.set(s0, s0, s0)
+      }
+      this.dirty = true
+      return
+    }
     if (this.mannequin) {
       this.world.remove(this.mannequin)
       disposeObject(this.mannequin)
@@ -207,6 +229,31 @@ export class TryonEngine {
 
   getBodyProfile(): BodyProfile {
     return { ...this.model.profile }
+  }
+
+  /**
+   * 切换到雕刻网格人体。
+   *
+   * 解剖细节由 MakeHuman 的 CC0 雕刻提供，体型变化由耦合模型重拟合 ——
+   * 见 mesh-body.ts 的算法说明。
+   */
+  async useMeshBody(url: string): Promise<void> {
+    const profile = this.model.profile
+    const mb = await MeshBody.loadFromUrl(url, profile, profile.gender)
+    if (this.meshBody) {
+      this.world.remove(this.meshBody.object3D)
+      this.meshBody.dispose()
+    }
+    this.meshBody = mb
+    this.world.add(mb.object3D)
+    mb.setProfile(profile)
+    if (this.mannequin) this.mannequin.visible = false
+    this.dirty = true
+  }
+
+  /** 是否正在使用雕刻网格人体 */
+  get usingMeshBody(): boolean {
+    return this.meshBody !== null
   }
 
   // ------------------------------------------------------------ 服装

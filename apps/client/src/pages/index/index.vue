@@ -33,6 +33,9 @@
         <text class="hint-text">{{ stageHint }}</text>
       </view>
       <view class="stage-tools">
+        <view class="tool-btn" :class="{ on: useMesh }" @click="toggleMesh">
+          <text>{{ meshLoading ? '加载中…' : useMesh ? '雕刻白模 ✓' : '换成雕刻白模' }}</text>
+        </view>
         <view class="tool-btn" @click="resetCamera"><text>重置视角</text></view>
         <view class="tool-btn" @click="clearAll"><text>全部脱下</text></view>
       </view>
@@ -451,6 +454,43 @@ function applyPoseFromQuery() {
 }
 
 /** 引擎需要的是展开后的完整身型数据 */
+/**
+ * 是否使用雕刻网格人体。
+ *
+ * 网格的解剖细节来自 MakeHuman 的 CC0 雕刻，体型由耦合模型重拟合 ——
+ * 见 packages/tryon-engine/src/mesh-body.ts。
+ * SDF 人体同时保留（服装壳的射线求交依赖它），两者由同一份身型数据驱动。
+ */
+const useMesh = ref(false)
+const meshLoading = ref(false)
+const meshError = ref('')
+
+async function loadMesh() {
+  if (!engine || meshLoading.value) return
+  meshLoading.value = true
+  meshError.value = ''
+  try {
+    await engine.useMeshBody(`/static/models/${state.gender}.obj`)
+    useMesh.value = engine.usingMeshBody
+  } catch (err) {
+    meshError.value = String(err)
+    console.error('[CDA] 雕刻网格加载失败:', err)
+  } finally {
+    meshLoading.value = false
+  }
+}
+
+/**
+ * 开关雕刻网格。
+ * ⚠️ 曾经的问题：开启后按钮文案改为「雕刻白模」，再点无效 ——
+ * 于是**切换性别后网格不会跟着换**（切到男性仍是女性身体）。
+ * 现在开关只负责开，性别变化由 setGender 负责重载。
+ */
+async function toggleMesh() {
+  if (useMesh.value) return
+  await loadMesh()
+}
+
 function currentProfile() {
   return deriveProfile(state)
 }
@@ -500,6 +540,8 @@ function setGender(gender: 'male' | 'female') {
   Object.assign(state, setGenderState(state, gender))
   Object.assign(store.body, currentProfile())
   engine?.setBodyProfile(currentProfile(), 'final')
+  // 网格已开启时必须换网格，否则会一直是上一个性别的身体
+  if (useMesh.value) void loadMesh()
 }
 
 /**
@@ -827,6 +869,16 @@ function onItemClick(item: { productId: string }) {
 .card-note {
   font-size: 11px;
   color: #a0a0a0;
+}
+
+.tool-btn.on {
+  background: #1a1a1a;
+}
+.tool-btn.on text {
+  color: #ffffff;
+}
+.stage-hint.err {
+  color: #c0504d;
 }
 
 /* ---------- 滑杆 ---------- */
