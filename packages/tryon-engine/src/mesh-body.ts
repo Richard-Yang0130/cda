@@ -15,7 +15,7 @@
  */
 import * as THREE from 'three'
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js'
-import { defaultBodyProfile, type BodyProfile } from '@cda/core'
+import { createBodyState, deriveProfile, type BodyProfile } from '@cda/core'
 
 /**
  * 体表查询接口。
@@ -267,26 +267,25 @@ export class MeshBody implements BodySurface {
   setProfile(profile: BodyProfile): void {
     this.profile = profile
     const heightM = profile.heightCm / 100
-    const neutral = defaultBodyProfile(profile.gender)
+    // 中性档案必须等于**应用自己的默认状态**。
+    // 原先用 defaultBodyProfile（胸86/腰67），而应用默认是 adiposity 0.35
+    // （胸88/腰71）—— 默认状态下网格就已经被改了 2–6%，雕刻原貌一开始就丢了。
+    const neutral = deriveProfile(createBodyState(profile.gender))
     const ratio = (v: number, nn: number) => (nn > 1e-6 ? v / nn : 1)
 
     // 各段的整体增益。四肢用**常数**增益 —— 网格自身的锥度保留，
     // 只整体缩放，于是不会出现「一段粗一段细」。
     // 躯干按高度变（胯/腰/胸三点），并在肩以上**回到 1.0** ——
     // 肩宽属骨骼，不该随胸围变（上一版肩部鼓包就是这个原因）。
-    const gainOf = (name: string, t: number): number => {
-      if (name === 'head') return 1
-      if (name.startsWith('arm')) return ratio(profile.upperArmCircCm, neutral.upperArmCircCm)
-      if (name.startsWith('leg')) return ratio(profile.thighCircCm, neutral.thighCircCm)
-      // 躯干：把 t 还原成归一化身高，再在三个控制点上取值
-      const y = LEVELS.crotch + t * (LEVELS.shoulder + 0.03 - LEVELS.crotch)
-      const gHip = ratio(profile.hipCm, neutral.hipCm)
-      const gWaist = ratio(profile.waistCm, neutral.waistCm)
-      const gChest = ratio(profile.chestCm, neutral.chestCm)
+    // 躯干增益随高度变化。单独抽出来，是为了让四肢在交界处**与躯干取值一致** ——
+    // 这是消除「体段交界处横向条带」的关键：各段增益若在边界上不等，
+    // 交界顶点就会跳变，视觉上是一圈台阶（用户看到的凹陷）。
+    const torsoGainAtY = (y: number): number => {
       const pts: Array<[number, number]> = [
-        [LEVELS.hip, gHip],
-        [LEVELS.waist, gWaist],
-        [LEVELS.chest, gChest],
+        [LEVELS.hip, ratio(profile.hipCm, neutral.hipCm)],
+        [LEVELS.waist, ratio(profile.waistCm, neutral.waistCm)],
+        [LEVELS.chest, ratio(profile.chestCm, neutral.chestCm)],
+        // 肩以上回到 1.0：肩宽属骨骼，不该随胸围变
         [LEVELS.shoulder + 0.03, 1],
       ]
       if (y <= pts[0]![0]) return pts[0]![1]
@@ -298,11 +297,29 @@ export class MeshBody implements BodySurface {
       return 1
     }
 
+    // 四肢在交界处取躯干的增益，再平滑过渡到自身的常数增益
+    const gThigh = ratio(profile.thighCircCm, neutral.thighCircCm)
+    const gArm = ratio(profile.upperArmCircCm, neutral.upperArmCircCm)
+    const gAtShoulder = torsoGainAtY(LEVELS.shoulder - 0.02)
+    const gAtHip = torsoGainAtY(LEVELS.crotch)
+
+    const gainOf = (name: string, t: number): number => {
+      if (name === 'head') return 1
+      if (name.startsWith('leg')) {
+        const k = Math.min(1, t / 0.18)
+        return gAtHip + (gThigh - gAtHip) * k
+      }
+      if (name.startsWith('arm')) {
+        const k = Math.min(1, t / 0.16)
+        return gAtShoulder + (gArm - gAtShoulder) * k
+      }
+      return torsoGainAtY(LEVELS.crotch + t * (LEVELS.shoulder + 0.03 - LEVELS.crotch))
+    }
+
     const pos = this.geo.getAttribute('position') as THREE.BufferAttribute
     const arr = pos.array as Float32Array
     const base = this.base
     const v = new THREE.Vector3()
-    const acc = new THREE.Vector3()
     const wSum: number[] = []
     const scored: Array<{ seg: MeshSegment; s: ReturnType<MeshBody['segScore']> }> = []
 
@@ -334,15 +351,27 @@ export class MeshBody implements BodySurface {
        * 人偶直接揉成一团。位移量在增益接近 1 时本来就很小，
        * 混合它才是安全的。
        */
-      acc.set(0, 0, 0)
-      for (let k = 0; k < scored.length; k++) {
-        const { seg, s } = scored[k]!
-        const g = gainOf(seg.name, s.t)
-        acc.addScaledVector(s.perp, ((g - 1) * wSum[k]!) / total)
+      /*
+       * 混合的是**标量增益**，再沿主导段的垂距方向位移。
+       *
+       * ⚠️ 不能混合「位移向量」。各段的 perp 方向互不相同（各自垂直于不同的轴），
+       * 向量相加会互相抵消变短，表面被拉向内侧 —— 这就是模型上那些**凹陷**
+       * 的来源，也是线性混合蒙皮的老问题。混合标量保证位移严格沿径向。
+       */
+      let bestK = 0
+      let bestW = -1
+      for (let k = 0; k < wSum.length; k++) {
+        if (wSum[k]! > bestW) { bestW = wSum[k]!; bestK = k }
       }
-      arr[i] = (v.x + acc.x) * heightM
-      arr[i + 1] = (v.y + acc.y) * heightM
-      arr[i + 2] = (v.z + acc.z) * heightM
+      let gBlend = 0
+      for (let k = 0; k < scored.length; k++) {
+        gBlend += gainOf(scored[k]!.seg.name, scored[k]!.s.t) * (wSum[k]! / total)
+      }
+      const dom = scored[bestK]!
+      const disp = dom.s.perp.clone().multiplyScalar(gBlend - 1)
+      arr[i] = (v.x + disp.x) * heightM
+      arr[i + 1] = (v.y + disp.y) * heightM
+      arr[i + 2] = (v.z + disp.z) * heightM
     }
 
     pos.needsUpdate = true

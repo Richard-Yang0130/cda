@@ -428,8 +428,18 @@ function initEngine() {
 function applyBodyFromQuery() {
   // #ifdef H5
   if (typeof window === 'undefined') return
-  const spec = new URLSearchParams(window.location.search).get('m')
-  if (!spec) return
+  const qs = new URLSearchParams(window.location.search)
+  // 性别也可以从 URL 指定，便于自动化测试男女两套
+  const gq = qs.get('g')
+  if (gq === 'male' || gq === 'female') {
+    if (state.gender !== gq) Object.assign(state, setGenderState(state, gq))
+  }
+  const spec = qs.get('m')
+  if (!spec) {
+    Object.assign(store.body, currentProfile())
+    engine?.setBodyProfile(currentProfile(), 'final')
+    return
+  }
   const map: Record<string, 'height' | 'weight' | 'girth' | 'frame'> = {
     height: 'height', weight: 'weight',
     chest: 'girth', waist: 'girth', hip: 'girth', thigh: 'girth', arm: 'girth',
