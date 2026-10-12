@@ -141,7 +141,13 @@ export function buildSkeleton(profile: BodyProfile): BodySkeleton {
   // ── 四肢 ──
   const upperArmR = semiAxes(profile.upperArmCircCm / 100, 0.94).w
   const thighR = semiAxes(profile.thighCircCm / 100, 0.95).w
-  const armTilt = male ? 0.17 : 0.14
+  /**
+   * 手臂倾角。**必须与雕刻网格的站姿一致** ——
+   * 网格是 A 字（约 45°），而这里原本只有 8–10°，
+   * 于是衣服袖子照着近乎垂直的手臂建出来，
+   * 飘在网格实际手臂旁边的空气里（实测：点击穿上完全不贴合）。
+   */
+  const armTilt = 0.80
   const upperLen = profile.upperArmCm / 100
   const foreLen = profile.forearmCm / 100
   const thighLen = profile.thighCm / 100
@@ -152,8 +158,8 @@ export function buildSkeleton(profile: BodyProfile): BodySkeleton {
     const root: Vec3 = [rootX, shoulderY - 0.012, 0]
     const elbowX = rootX + side * Math.sin(armTilt) * upperLen
     const elbow: Vec3 = [elbowX, root[1] - Math.cos(armTilt) * upperLen, 0.012 * upperLen]
-    const wristX = elbowX + side * Math.sin(armTilt * 0.7) * foreLen
-    const wrist: Vec3 = [wristX, elbow[1] - Math.cos(armTilt * 0.7) * foreLen, elbow[2] + 0.01]
+    const wristX = elbowX + side * Math.sin(armTilt * 0.95) * foreLen
+    const wrist: Vec3 = [wristX, elbow[1] - Math.cos(armTilt * 0.95) * foreLen, elbow[2] + 0.01]
     // 半径系数必须让**上臂中段真正达到实测围度**。
     // 原先 rRoot 0.92 / rMid 0.82，等于系统性地比实测细一成 ——
     // 这正是「手臂太细」的直接来源。

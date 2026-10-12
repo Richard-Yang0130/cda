@@ -13,6 +13,7 @@
  */
 import * as THREE from 'three'
 import type { BodySlot, GarmentDimensions, WearMode } from '@cda/core'
+import type { BodySurface } from './mesh-body'
 import {
   buildArmSpecs,
   buildLegSpecs,
@@ -150,10 +151,24 @@ export class Garment {
   /** 实际覆盖区间（归一化高度）：有衣长数据就由数据推导 */
   private readonly range: { fromT: number; toT: number }
 
+  /**
+   * 体表查询。默认用 SDF 模型自己的求交，
+   * 身体换成雕刻网格后由引擎注入网格的 raycast ——
+   * 否则衣服会照着**另一具体型不同、姿势也不同的**身体来计算。
+   */
+  private readonly surface: BodySurface
+
   constructor(
     private readonly model: BodyModel,
     spec: GarmentSpec,
+    surface?: BodySurface,
   ) {
+    this.surface =
+      surface ??
+      ({
+        radiusAt: (ox, oy, oz, dx, dy, dz, maxDist) =>
+          model.surfaceRadius(ox, oy, oz, dx, dy, dz, maxDist),
+      } satisfies BodySurface)
     this.spec = spec
     this._wearMode = spec.allowedModes[0] ?? 'worn'
     this._fastenerClosed = spec.fastenerTotal ?? 0
@@ -274,7 +289,7 @@ export class Garment {
         const dirZ = Math.sin(theta)
         // 从身体中轴向外打一条射线，取到真实表面距离。
         // 这一步让衣服跟着胸、背、腰的真实起伏走，而不是套一个椭圆。
-        const hit = this.model.surfaceRadius(0, y, 0, dirX, 0, dirZ, 0.5)
+        const hit = this.surface.radiusAt(0, y, 0, dirX, 0, dirZ, 0.5)
         // 射不到（例如该高度已越过肩线、轴点落在体外）就沿用上一行的半径，
         // 否则会冒出一根尖刺
         let base = hit
@@ -341,7 +356,7 @@ export class Garment {
           const dirZ = Math.sin(theta)
           // 上限取解析半径的 2 倍：超过说明射线穿到了另一条腿，
           // 此时必须回退解析半径，否则一条裤腿会把整个骨盆包进去
-          const hit = this.model.surfaceRadius(center.x, center.y, center.z, dirX, 0, dirZ, fallback * 2)
+          const hit = this.surface.radiusAt(center.x, center.y, center.z, dirX, 0, dirZ, fallback * 2)
           const rad = (hit ?? fallback) + off
           positions.push(center.x + dirX * rad, center.y, center.z + dirZ * rad)
           uvs.push(c / segs, k)
@@ -412,7 +427,7 @@ export class Garment {
           const theta = (c / segs) * Math.PI * 2
           const dirX = Math.cos(theta)
           const dirZ = Math.sin(theta)
-          const hit = this.model.surfaceRadius(center.x, center.y, center.z, dirX, 0, dirZ, fallback * 2.2)
+          const hit = this.surface.radiusAt(center.x, center.y, center.z, dirX, 0, dirZ, fallback * 2.2)
           const radius = (hit ?? fallback) + off
           positions.push(center.x + dirX * radius, center.y, center.z + dirZ * radius)
           uvs.push(c / segs, k)
@@ -466,7 +481,7 @@ export class Garment {
         const theta = (c / segs) * Math.PI * 2
         const dirX = Math.cos(theta)
         const dirZ = Math.sin(theta)
-        const hit = this.model.surfaceRadius(0, y, 0, dirX, 0, dirZ, 0.5)
+        const hit = this.surface.radiusAt(0, y, 0, dirX, 0, dirZ, 0.5)
         let base = hit
         if (base === null) base = lastRadius[c]!
         else lastRadius[c] = base
@@ -600,6 +615,7 @@ export function createGarment(
   productId: string,
   colorHex?: number,
   dimensions?: GarmentDimensions,
+  surface?: BodySurface,
 ): Garment | null {
   const reg = GARMENT_REGISTRY[productId]
   if (!reg) return null
@@ -610,7 +626,7 @@ export function createGarment(
     color: reg.color,
     dimensions,
   }
-  const g = new Garment(model, spec)
+  const g = new Garment(model, spec, surface)
   if (colorHex !== undefined) g.setColor(colorHex)
   return g
 }

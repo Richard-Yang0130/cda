@@ -267,7 +267,8 @@ export class TryonEngine {
 
     if (dimensions) this.garmentDimensions.set(productId, dimensions)
     const dims = dimensions ?? this.garmentDimensions.get(productId)
-    const garment = createGarment(this.model, productId, colorHex, dims)
+    // 有雕刻网格时，服装按**网格的实际表面**求交
+    const garment = createGarment(this.model, productId, colorHex, dims, this.meshBody ?? undefined)
     if (!garment) return null
 
     // 按 bodySlot 决定层级顺序，保证外套在外、内衣在里
