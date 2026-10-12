@@ -17,6 +17,25 @@ import * as THREE from 'three'
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js'
 import { defaultBodyProfile, type BodyProfile } from '@cda/core'
 
+/**
+ * 体表查询接口。
+ *
+ * 服装壳的拟合靠「从身体内部一点沿方向投射射线，求到体表的距离」。
+ * 把这件能力抽成接口，SDF 人体与雕刻网格各实现一份，
+ * 服装代码就不必知道身后是哪一种身体。
+ */
+export interface BodySurface {
+  /**
+   * 从内部一点 (ox,oy,oz) 沿单位方向 (dx,dy,dz) 找体表距离（米）。
+   * 起点必须在体内；未命中返回 null。
+   */
+  radiusAt(
+    ox: number, oy: number, oz: number,
+    dx: number, dy: number, dz: number,
+    maxDist: number,
+  ): number | null
+}
+
 /** 一个控制高度上的参考信息 */
 interface ControlLevel {
   /** 归一化高度 0..1 */
@@ -53,7 +72,7 @@ function median(a: number[]): number {
   return s[s.length >> 1]!
 }
 
-export class MeshBody {
+export class MeshBody implements BodySurface {
   readonly object3D: THREE.Object3D
   private readonly mesh: THREE.Mesh
   private readonly geo: THREE.BufferGeometry
@@ -112,6 +131,10 @@ export class MeshBody {
       clearcoat: 0.4,
       clearcoatRoughness: 0.4,
       metalness: 0,
+      // ⚠️ 必须双面。Raycaster 默认只命中正面三角形，
+      // 而服装求交是**从身体内部向外**投射的，打到的是体表三角形的**背面**——
+      // 单面时会全部落空（实测三个高度里两个返回 null）。
+      side: THREE.DoubleSide,
     })
     this.mesh.material = mat
     this.geo.computeVertexNormals()
@@ -338,6 +361,37 @@ export class MeshBody {
   get currentProfile(): BodyProfile {
     return this.profile
   }
+
+  /**
+   * 体表查询：对网格做 raycast。
+   *
+   * 这是 SDF 射线步进的替代品 —— 身体换成雕刻网格后，
+   * 服装壳必须按**网格的实际表面**求交，否则衣服会照着另一具身体计算。
+   *
+   * 注意：Raycaster 用的是世界坐标，所以必须先 updateMatrixWorld。
+   */
+  radiusAt(
+    ox: number, oy: number, oz: number,
+    dx: number, dy: number, dz: number,
+    maxDist: number,
+  ): number | null {
+    const len = Math.hypot(dx, dy, dz)
+    if (len < 1e-9) return null
+    this.rayOrigin.set(ox, oy, oz)
+    this.rayDir.set(dx / len, dy / len, dz / len)
+    this.raycaster.set(this.rayOrigin, this.rayDir)
+    this.raycaster.near = 0
+    this.raycaster.far = maxDist
+    // 变形后包围盒会变，必须先刷新世界矩阵与包围体
+    this.mesh.updateMatrixWorld(true)
+    this.geo.computeBoundingSphere()
+    const hits = this.raycaster.intersectObject(this.mesh, false)
+    return hits.length ? hits[0]!.distance : null
+  }
+
+  private readonly raycaster = new THREE.Raycaster()
+  private readonly rayOrigin = new THREE.Vector3()
+  private readonly rayDir = new THREE.Vector3()
 
   dispose(): void {
     this.geo.dispose()

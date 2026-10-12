@@ -249,6 +249,8 @@ export class TryonEngine {
     mb.setProfile(profile)
     if (this.mannequin) this.mannequin.visible = false
     this.dirty = true
+
+
   }
 
   /** 是否正在使用雕刻网格人体 */
