@@ -12,7 +12,7 @@
  *   服装壳层只有几百个顶点，每次重算的开销可以忽略。
  */
 import * as THREE from 'three'
-import type { BodySlot, WearMode } from '@cda/core'
+import type { BodySlot, GarmentDimensions, WearMode } from '@cda/core'
 import {
   buildArmSpecs,
   buildLegSpecs,
@@ -22,15 +22,38 @@ import {
   type LimbSpec,
 } from './body'
 
+/** 各挂载部位的基准外扩量（cm）—— 布料本身撑在皮肤之外的那点空隙 */
+const SLOT_BASE_OFFSET_CM: Record<BodySlot, number> = {
+  upper: 1.0,
+  outer: 1.6,
+  lower: 1.1,
+  neck: 1.8,
+  waist: 1.5,
+  head: 0.8,
+}
+
+/**
+ * 由面料厚度推导外扩量。
+ *
+ * 厚度必须真正参与建模，否则衣服之间只是「两层壳叠着」，
+ * 看不出牛仔比雪纺厚。这里用 **厚度(mm) × 0.25** 放大到可视尺度 ——
+ * 真实厚度只有零点几毫米，直接换算成厘米在屏幕上完全看不出来。
+ */
+function offsetFromThickness(slot: BodySlot, thicknessMm?: number): number {
+  const base = SLOT_BASE_OFFSET_CM[slot]
+  if (!thicknessMm || thicknessMm <= 0) return base
+  return base + thicknessMm * 0.25
+}
+
 /** 一件单品在 3D 人偶上的挂载描述 */
 export interface GarmentSpec {
   id: string
   productId: string
   bodySlot: BodySlot
-  /** 覆盖的高度区间（归一化 t） */
+  /** 覆盖的高度区间（归一化 t）。**仅作为尺寸数据缺失时的回退** */
   fromT: number
   toT: number
-  /** 相对身体表面的向外偏移，单位 cm —— 模拟衣服厚度与松量 */
+  /** 相对身体表面的向外偏移，单位 cm。**仅作为尺寸数据缺失时的回退** */
   offsetCm: number
   /** 颜色 */
   color: number
@@ -40,6 +63,8 @@ export interface GarmentSpec {
   allowedModes: WearMode[]
   /** 袖长：不填表示无袖。袖子与手臂共用 limb specs，保证严格对齐 */
   sleeve?: 'short' | 'long'
+  /** 成衣实测尺寸。有它就按它建模，没有才回退到上面的常数 */
+  dimensions?: GarmentDimensions
 }
 
 /**
@@ -120,6 +145,11 @@ export class Garment {
   private _wearMode: WearMode
   private _fastenerClosed: number
 
+  /** 实际外扩量（cm）：有面料厚度就由厚度推导，否则用 spec 的常数 */
+  private readonly offsetCm: number
+  /** 实际覆盖区间（归一化高度）：有衣长数据就由数据推导 */
+  private readonly range: { fromT: number; toT: number }
+
   constructor(
     private readonly model: BodyModel,
     spec: GarmentSpec,
@@ -127,7 +157,43 @@ export class Garment {
     this.spec = spec
     this._wearMode = spec.allowedModes[0] ?? 'worn'
     this._fastenerClosed = spec.fastenerTotal ?? 0
+    this.offsetCm = spec.dimensions?.thicknessMm
+      ? offsetFromThickness(spec.bodySlot, spec.dimensions.thicknessMm)
+      : spec.offsetCm
+    this.range = this.computeRange()
     this.object3D = this.build()
+  }
+
+  /**
+   * 由成衣实测长度推导覆盖区间。
+   *
+   * 这一步是「服装数据库驱动建模」真正落地的地方：
+   * 不是给每件衣服写死一个高度范围，而是读它的衣长/裤长算出来。
+   * 于是同一件衣服穿在 155cm 和 185cm 的人身上，下摆位置自动不同。
+   */
+  private computeRange(): { fromT: number; toT: number } {
+    const sk = this.model.skeleton
+    const H = sk.height
+    const dims = this.spec.dimensions
+    if (!dims) return { fromT: this.spec.fromT, toT: this.spec.toT }
+
+    // 配饰（围巾等）的「长度」含义不同，仍用 spec 的区间
+    if (this.spec.bodySlot === 'neck' || this.spec.bodySlot === 'waist') {
+      return { fromT: this.spec.fromT, toT: this.spec.toT }
+    }
+
+    if (this.spec.bodySlot === 'lower') {
+      const outseam = (dims.outseamCm ?? dims.inseamCm ?? 100) / 100
+      const topY = sk.waistY + 0.03
+      const bottomY = Math.max(H * 0.03, topY - outseam)
+      return { fromT: bottomY / H, toT: topY / H }
+    }
+
+    // 上装 / 外套：从肩线略上方往下量一个衣长
+    const len = (dims.lengthCm ?? 62) / 100
+    const topY = sk.shoulderY + 0.015
+    const bottomY = topY - len
+    return { fromT: Math.max(0.04, bottomY / H), toT: topY / H }
   }
 
   get wearMode(): WearMode {
@@ -189,7 +255,7 @@ export class Garment {
   /** 上装 / 外套 / 连衣裙：绕躯干的壳层 */
   private buildShell(group: THREE.Group): void {
     const H = this.model.skeleton.height
-    const off = this.spec.offsetCm * 0.01
+    const off = this.offsetCm * 0.01
     const segs = 48
     const rows = 26
 
@@ -200,7 +266,7 @@ export class Garment {
     const lastRadius = new Array<number>(segs + 1).fill(0.12)
 
     for (let r = 0; r <= rows; r++) {
-      const t = this.spec.fromT + ((this.spec.toT - this.spec.fromT) * r) / rows
+      const t = this.range.fromT + ((this.range.toT - this.range.fromT) * r) / rows
       const y = t * H
       for (let c = 0; c <= segs; c++) {
         const theta = (c / segs) * Math.PI * 2
@@ -248,7 +314,7 @@ export class Garment {
   /** 下装：两条绕腿的管子，半径向 SDF 求贴合 */
   private buildLegs(group: THREE.Group): void {
     const H = this.model.skeleton.height
-    const off = this.spec.offsetCm * 0.01
+    const off = this.offsetCm * 0.01
     const segs = 28
     const rows = 22
 
@@ -316,13 +382,19 @@ export class Garment {
    */
   private buildSleeves(group: THREE.Group, kind: 'short' | 'long'): void {
     const H = this.model.skeleton.height
-    const off = this.spec.offsetCm * 0.01
+    const off = this.offsetCm * 0.01
     const segs = 24
     const rows = 18
-    // 短袖覆盖上臂约 1/3，长袖到手腕附近
-    const coverage = kind === 'long' ? 0.95 : 0.36
+    const dims = this.spec.dimensions
 
     for (const arm of buildArmSpecs(this.model)) {
+      // 有实测袖长就按袖长算覆盖比例。臂长因人而异，
+      // 同一件衣服穿在不同身高的人身上，袖口位置自然不同。
+      const coverage = dims?.sleeveCm
+        ? Math.min(0.98, dims.sleeveCm / 100 / arm.length)
+        : kind === 'long'
+          ? 0.95
+          : 0.36
       const len = arm.length * coverage
       const positions: number[] = []
       const uvs: number[] = []
@@ -376,7 +448,7 @@ export class Garment {
   /** 配饰：围在脖子/腰上的环带。半径同样向 SDF 求，贴合颈/腰的真实轮廓 */
   private buildBand(group: THREE.Group): void {
     const H = this.model.skeleton.height
-    const off = this.spec.offsetCm * 0.01
+    const off = this.offsetCm * 0.01
     const segs = 64
     const rows = 6
     const positions: number[] = []
@@ -386,7 +458,7 @@ export class Garment {
     const lastRadius = new Array<number>(segs + 1).fill(0.08)
 
     for (let r = 0; r <= rows; r++) {
-      const t = this.spec.fromT + ((this.spec.toT - this.spec.fromT) * r) / rows
+      const t = this.range.fromT + ((this.range.toT - this.range.fromT) * r) / rows
       const y = t * H
       // 环带比身体略粗，形成蓬松的围巾感
       const bulge = r === 0 || r === rows ? 0 : Math.sin((r / rows) * Math.PI) * 0.012
@@ -481,7 +553,7 @@ export class Garment {
     // 用 cos(θ) 会把"前襟"开到侧面去（曾因此导致敞开模式几乎看不出效果）。
     const front = Math.max(0, Math.sin(p.theta))
     // 越靠上、越靠前，张开越明显（模拟衣襟从上往下敞开）
-    const heightK = total > 0 ? Math.max(0, (p.t - this.spec.fromT) / (this.spec.toT - this.spec.fromT)) : 0
+    const heightK = total > 0 ? Math.max(0, (p.t - this.range.fromT) / (this.range.toT - this.range.fromT)) : 0
 
     let dx = 0
     let dy = 0
@@ -496,7 +568,7 @@ export class Garment {
 
     // --- 披着：整体上移 + 后仰 + 略微放松 ---
     if (mode === 'draped') {
-      const k = (p.t - this.spec.fromT) / Math.max(1e-6, this.spec.toT - this.spec.fromT)
+      const k = (p.t - this.range.fromT) / Math.max(1e-6, this.range.toT - this.range.fromT)
       dy += 0.045 + k * 0.02
       dz -= 0.03 * k
       dx += bx * 0.06
@@ -523,7 +595,12 @@ export class Garment {
 }
 
 /** 便捷工厂 */
-export function createGarment(model: BodyModel, productId: string, colorHex?: number): Garment | null {
+export function createGarment(
+  model: BodyModel,
+  productId: string,
+  colorHex?: number,
+  dimensions?: GarmentDimensions,
+): Garment | null {
   const reg = GARMENT_REGISTRY[productId]
   if (!reg) return null
   const spec: GarmentSpec = {
@@ -531,6 +608,7 @@ export function createGarment(model: BodyModel, productId: string, colorHex?: nu
     productId,
     ...reg,
     color: reg.color,
+    dimensions,
   }
   const g = new Garment(model, spec)
   if (colorHex !== undefined) g.setColor(colorHex)

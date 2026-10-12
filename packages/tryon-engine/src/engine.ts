@@ -12,7 +12,7 @@
  * H5 / App(webview) / 微信小程序 上运行。
  */
 import * as THREE from 'three'
-import type { BodyProfile, WearMode } from '@cda/core'
+import type { BodyProfile, GarmentDimensions, WearMode } from '@cda/core'
 import { defaultBodyProfile } from '@cda/core'
 import {
   buildMannequin,
@@ -51,6 +51,8 @@ export class TryonEngine {
    */
   private model: BodyModel
   private readonly garments = new Map<string, Garment>()
+  /** 记住每件单品的成衣尺寸，身型变化后重建服装时要用 */
+  private readonly garmentDimensions = new Map<string, GarmentDimensions>()
 
   private frameHandle: number | null = null
   private running = false
@@ -210,11 +212,13 @@ export class TryonEngine {
   // ------------------------------------------------------------ 服装
 
   /** 把一件单品穿到人偶上。返回该图层，若该单品无 3D 描述则返回 null */
-  addGarment(productId: string, colorHex?: number): Garment | null {
+  addGarment(productId: string, colorHex?: number, dimensions?: GarmentDimensions): Garment | null {
     const existing = this.garments.get(productId)
     if (existing) return existing
 
-    const garment = createGarment(this.model, productId, colorHex)
+    if (dimensions) this.garmentDimensions.set(productId, dimensions)
+    const dims = dimensions ?? this.garmentDimensions.get(productId)
+    const garment = createGarment(this.model, productId, colorHex, dims)
     if (!garment) return null
 
     // 按 bodySlot 决定层级顺序，保证外套在外、内衣在里

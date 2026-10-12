@@ -58,6 +58,49 @@ export interface ColorOption {
   hex: string
 }
 
+/**
+ * 服装实测尺寸（单位 cm，厚度用 mm）。
+ *
+ * 这不是装饰性字段 —— 它是 3D 服装建模的**唯一依据**：
+ *   - thicknessMm 决定衣服相对身体外扩多少，也决定多层叠穿的间距
+ *   - lengthCm / sleeveCm / inseamCm 决定服装覆盖的高度区间
+ *   - 各围度决定服装的松量（与用户身体围度之差就是「合身度」）
+ *
+ * 字段全部可选：真实商品数据往往残缺，缺哪项就回退到类目默认值。
+ */
+export interface GarmentDimensions {
+  /** 面料厚度（mm）。针织厚、雪纺薄，差一个量级，直接影响建模结果 */
+  thicknessMm: number
+
+  // ── 上装 ──
+  /** 衣长：肩点到下摆 */
+  lengthCm?: number
+  /** 肩宽（成衣） */
+  shoulderCm?: number
+  /** 胸围（成衣平量 ×2） */
+  chestCm?: number
+  /** 腰围（成衣收腰款才有） */
+  waistCm?: number
+  /** 下摆围 */
+  hemCm?: number
+  /** 袖长：肩点到袖口 */
+  sleeveCm?: number
+  /** 袖口围 */
+  cuffCm?: number
+  /** 领围 */
+  necklineCm?: number
+
+  // ── 下装 ──
+  /** 裤长：腰头到脚口 */
+  outseamCm?: number
+  /** 内长：裆到脚口 */
+  inseamCm?: number
+  /** 脚口围 */
+  legOpeningCm?: number
+  /** 臀围（成衣） */
+  hipCm?: number
+}
+
 /** 商品 */
 export interface Product {
   id: string
@@ -72,6 +115,8 @@ export interface Product {
   modelImage?: string
   colors: ColorOption[]
   sizes: string[]
+  /** 实测尺寸：3D 服装建模的依据 */
+  dimensions: GarmentDimensions
 }
 
 /** 性别。只影响体块轮廓（肩宽/腰臀比/胸廓/骨盆/四肢粗细），不做私密部位 */

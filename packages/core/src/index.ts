@@ -1,4 +1,5 @@
 export * from './types'
+export * from './presets'
 export * from './mock'
 export * from './sample-images'
 export * from './services/tryon'

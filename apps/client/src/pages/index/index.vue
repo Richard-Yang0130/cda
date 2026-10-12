@@ -45,6 +45,20 @@
         <text class="card-note">拖动人偶可旋转</text>
       </view>
 
+      <text class="group-title">角色比例</text>
+      <view class="preset-row">
+        <view
+          v-for="p in presets"
+          :key="p.id"
+          class="preset-chip"
+          :class="{ active: activePreset === p.id }"
+          @click="applyPreset(p.id)"
+        >
+          <text>{{ p.name }}</text>
+        </view>
+      </view>
+      <text class="preset-desc">{{ activePresetDesc }}</text>
+
       <view class="gender-row">
         <view
           v-for="g in genders"
@@ -169,7 +183,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, nextTick, ref, reactive, computed } from 'vue'
 import { onShow } from '@dcloudio/uni-app'
-import { findProduct, defaultBodyProfile, CATEGORY_LABEL, type Category, type WearMode } from '@cda/core'
+import { findProduct, BODY_PRESETS, buildProfileFromPreset, CATEGORY_LABEL, type Category, type WearMode } from '@cda/core'
 import { TryonEngine, createH5Platform, WEAR_MODE_LABEL, GARMENT_REGISTRY } from '@cda/tryon-engine'
 import { mountStage, type StageHost } from '@/platform/stage'
 import { store } from '@/store/app-store'
@@ -234,6 +248,13 @@ const genders = [
   { value: 'female' as const, label: '女性' },
   { value: 'male' as const, label: '男性' },
 ]
+
+/** 角色比例预设（写实 / 时装插画 / 动漫 / 游戏英雄） */
+const presets = BODY_PRESETS
+const activePreset = ref('realistic')
+const activePresetDesc = computed(
+  () => presets.find((p) => p.id === activePreset.value)?.description ?? '',
+)
 
 /**
  * 各分段之和 vs 身高。
@@ -398,10 +419,24 @@ function onMeasureChange(key: string, value: number, phase: 'changing' | 'change
   engine?.setBodyProfile({ ...body }, 'final')
 }
 
-/** 切换性别：套用对应预设并全精度重建 */
+/** 切换性别：套用当前预设的对应性别版本 */
 function setGender(gender: 'male' | 'female') {
   if (body.gender === gender) return
-  Object.assign(body, defaultBodyProfile(gender))
+  Object.assign(body, buildProfileFromPreset(activePreset.value, gender, body.heightCm))
+  Object.assign(store.body, body)
+  engine?.setBodyProfile({ ...body }, 'final')
+}
+
+/**
+ * 套用角色比例预设。
+ *
+ * 这是「好看」的关键：预设自带一套美学比例（头身比、肩宽/头宽、
+ * 腰臀比），用户在它基础上微调局部即可，而不是从零调一堆围度。
+ * 身高保留用户当前值 —— 那是用户自己的身体数据，不该被预设覆盖。
+ */
+function applyPreset(id: string) {
+  activePreset.value = id
+  Object.assign(body, buildProfileFromPreset(id, body.gender, body.heightCm))
   Object.assign(store.body, body)
   engine?.setBodyProfile({ ...body }, 'final')
 }
@@ -417,7 +452,9 @@ function wear(productId: string) {
   // 单件单品出问题不应该让整条链路中断（曾经因为围巾的一个 bug
   // 导致后续所有逻辑静默失效，排查了很久）
   try {
-    const g = engine.addGarment(productId)
+    const product = findProduct(productId)
+    // 把成衣实测尺寸交给引擎 —— 衣长、袖长、面料厚度都由它推导
+    const g = engine.addGarment(productId, undefined, product?.dimensions)
     if (!g) {
       stageHint.value = '该单品暂无 3D 描述'
       return
@@ -721,6 +758,35 @@ function onItemClick(item: { productId: string }) {
 }
 
 /* ---------- 滑杆 ---------- */
+.preset-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.preset-chip {
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: #f2f2f2;
+}
+.preset-chip text {
+  font-size: 12px;
+  color: #555;
+}
+.preset-chip.active {
+  background: #1a1a1a;
+}
+.preset-chip.active text {
+  color: #ffffff;
+}
+.preset-desc {
+  display: block;
+  font-size: 10.5px;
+  color: #a8a8a8;
+  line-height: 16px;
+  margin-bottom: 14px;
+}
+
 .gender-row {
   display: flex;
   gap: 8px;
