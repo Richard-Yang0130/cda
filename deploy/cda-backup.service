@@ -1,0 +1,9 @@
+[Unit]
+Description=CDA 数据库备份
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/cda
+ExecStart=/usr/bin/node /opt/cda/backup.mjs
+StandardOutput=append:/opt/cda/backup.log
+StandardError=append:/opt/cda/backup.log

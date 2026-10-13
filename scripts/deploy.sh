@@ -147,6 +147,22 @@ systemctl is-active $SERVICE
 REMOTE
   ok "服务已启动"
 
+  say "安装备份与日志轮转"
+  rsync -az -e "ssh ${SSH_OPTS[*]}" "$ROOT/deploy/" "$SSH_USER@$ip:$REMOTE_DIR/deploy/"
+  ssh "${SSH_OPTS[@]}" "$SSH_USER@$ip" bash -s <<'BACKUP'
+set -e
+sudo cp /opt/cda/deploy/backup.mjs /opt/cda/backup.mjs
+sudo chmod +x /opt/cda/backup.mjs
+sudo cp /opt/cda/deploy/cda-backup.service /etc/systemd/system/
+sudo cp /opt/cda/deploy/cda-backup.timer /etc/systemd/system/
+sudo cp /opt/cda/deploy/logrotate-cda /etc/logrotate.d/cda
+sudo systemctl daemon-reload
+sudo systemctl enable --now cda-backup.timer
+sudo systemctl start cda-backup.service || true
+systemctl list-timers cda-backup.timer --no-pager | head -2
+BACKUP
+  ok "备份定时器已安装"
+
   say "自检"
   ssh "${SSH_OPTS[@]}" "$SSH_USER@$ip" "curl -s --max-time 5 http://127.0.0.1:$PORT/api/health" || die "后端健康检查失败，看 /opt/cda/cda.log"
   echo
