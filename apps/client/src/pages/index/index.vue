@@ -13,6 +13,7 @@
       </view>
       <text class="subtitle">身型 → 人偶 → 拖拽穿搭 → 精细穿法</text>
       <view class="entry-grid">
+        <view class="entry-btn" @click="goProfile"><text>个人主页</text></view>
         <view class="entry-btn" @click="goWardrobe"><text>我的衣橱</text></view>
         <view class="entry-btn" @click="goOutfit"><text>穿搭建议</text></view>
         <view class="entry-btn" @click="goImport"><text>拍照导入</text></view>
@@ -38,100 +39,19 @@
       </view>
     </view>
 
-    <!-- ───────────── 身型控制 ───────────── -->
+    <!-- ───────────── 我的人偶（低频入口）───────────── -->
     <view class="card">
       <view class="card-head">
-        <text class="card-title">身型数据</text>
-        <text class="card-note">拖动人偶可旋转</text>
+        <text class="card-title">我的人偶</text>
+        <text class="card-note">{{ personaNote }}</text>
       </view>
-
-      <text class="group-title">性别</text>
-      <view class="gender-row">
-        <view
-          v-for="g in genders"
-          :key="g.value"
-          class="gender-chip"
-          :class="{ active: state.gender === g.value }"
-          @click="setGender(g.value)"
-        >
-          <text>{{ g.label }}</text>
+      <view class="persona-entry" @click="goPersona">
+        <view class="pe-left">
+          <text class="pe-title">{{ store.personaCreated ? '修改身型数据' : '创建我的人偶' }}</text>
+          <text class="pe-sub">身型只在创建与身体变化时调整，平时不用管</text>
         </view>
+        <text class="pe-arrow">›</text>
       </view>
-
-      <text class="group-title">形体风格</text>
-      <view class="preset-row">
-        <view
-          v-for="b in builds"
-          :key="b.id"
-          class="preset-chip"
-          :class="{ active: state.build === b.id }"
-          @click="setBuild(b.id)"
-        >
-          <text>{{ b.name }}</text>
-        </view>
-      </view>
-      <text class="preset-desc">{{ activeBuildDesc }}</text>
-
-      <text class="group-title">基础</text>
-      <view v-for="m in basicFields" :key="m.key" class="slider-row">
-        <text class="slider-label">{{ m.label }}</text>
-        <slider
-          class="slider"
-          :value="fieldValue(m.key)"
-          :min="fieldRange(m.key).min"
-          :max="fieldRange(m.key).max"
-          :step="1"
-          activeColor="#1a1a1a"
-          block-color="#1a1a1a"
-          :block-size="16"
-          @changing="(e: any) => onFieldChange(m.key, e.detail.value, 'changing')"
-          @change="(e: any) => onFieldChange(m.key, e.detail.value, 'change')"
-        />
-        <text class="slider-value">{{ fieldValue(m.key) }}{{ m.unit }}</text>
-      </view>
-
-      <text class="group-title">分区调整</text>
-      <view class="stage-row">
-        <view
-          v-for="s in stages"
-          :key="s.id"
-          class="stage-chip"
-          :class="{ active: activeStage === s.id }"
-          @click="activeStage = s.id"
-        >
-          <text>{{ s.name }}</text>
-        </view>
-      </view>
-
-      <view v-for="m in stageFields[activeStage]" :key="m.key" class="slider-row">
-        <text class="slider-label">{{ m.label }}</text>
-        <slider
-          class="slider"
-          :value="fieldValue(m.key)"
-          :min="fieldRange(m.key).min"
-          :max="fieldRange(m.key).max"
-          :step="1"
-          activeColor="#1a1a1a"
-          block-color="#1a1a1a"
-          :block-size="16"
-          @changing="(e: any) => onFieldChange(m.key, e.detail.value, 'changing')"
-          @change="(e: any) => onFieldChange(m.key, e.detail.value, 'change')"
-        />
-        <text class="slider-value">{{ fieldValue(m.key) }}{{ m.unit }}</text>
-      </view>
-
-      <text class="group-title">健康指标</text>
-      <view class="health-row">
-        <view v-for="mt in metrics" :key="mt.key" class="health-item" :class="mt.level">
-          <text class="health-label">{{ mt.label }}</text>
-          <text class="health-value">{{ mt.display }}</text>
-          <text class="health-note">{{ mt.note }}</text>
-        </view>
-      </view>
-      <text class="health-tip">
-        所有围度与体重由同一个体脂因子派生，因此拖动任意一项都会牵动全身；
-        可拖范围也随身高重新计算，越界的状态在生理上不存在。
-      </text>
     </view>
 
     <!-- ───────────── 我的衣橱 ───────────── -->
@@ -247,7 +167,10 @@ const stageHint = ref('按住可旋转人偶')
  * 围度由潜在因子（体脂水平）派生，所以拖动任何一项都会牵动全身。
  * 详见 packages/core/src/body-model.ts。
  */
-const state = reactive(createBodyState('female', 'average'))
+// 身型状态来自共享 store —— 编辑已搬到「个人主页 → 我的人偶」，
+// 首页只负责展示与人偶 + 衣橱，不再有滑杆
+const state = reactive<BodyState>({ ...store.bodyState, frame: { ...store.bodyState.frame } })
+const personaNote = computed(() => (store.personaCreated ? '拖动人偶可旋转' : '尚未创建'))
 const profile = computed(() => deriveProfile(state))
 const metrics = computed(() => healthMetrics(profile.value))
 
@@ -725,6 +648,14 @@ function goTryOn() {
   uni.navigateTo({ url: '/pages/tryon/tryon' })
 }
 
+function goPersona(): void {
+  uni.navigateTo({ url: '/pages/persona/persona' })
+}
+
+function goProfile(): void {
+  uni.navigateTo({ url: '/pages/profile/profile' })
+}
+
 function goWardrobe() {
   uni.navigateTo({ url: '/pages/wardrobe/wardrobe' })
 }
@@ -1056,6 +987,31 @@ function onItemClick(item: { productId: string }) {
   font-size: 9.5px;
   color: #9a9a9a;
   line-height: 13px;
+}
+.persona-entry {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  background: #f7f5f2;
+  border-radius: 12px;
+}
+.pe-left {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.pe-title {
+  font-size: 14px;
+  font-weight: 600;
+}
+.pe-sub {
+  font-size: 10.5px;
+  color: #a0a0a0;
+}
+.pe-arrow {
+  font-size: 20px;
+  color: #c8c8c8;
 }
 .health-tip {
   display: block;

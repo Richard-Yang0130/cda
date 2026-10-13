@@ -7,21 +7,64 @@
  *   3. 后续要换成 Pinia 或接后端，只需把这几个函数改成 action，页面无需改
  */
 import { reactive } from 'vue'
-import { defaultBodyProfile, mockWardrobe, type WardrobeItem } from '@cda/core'
+import {
+  createBodyState, deriveProfile, defaultBodyProfile, mockWardrobe,
+  type BodyState, type Gender, type WardrobeItem,
+} from '@cda/core'
 
 let seq = 0
 
 export const store = reactive({
   /** 我的衣橱 */
   wardrobe: [...mockWardrobe] as WardrobeItem[],
-  /** 身型数据，3D 试穿台与穿搭建议共用 */
+  /** 身型数据（派生结果），3D 试穿台与穿搭建议共用 */
   body: defaultBodyProfile('female'),
+  /**
+   * 身型**可编辑状态**（体脂因子 + 骨骼参数）。
+   *
+   * 身型编辑已从试穿页搬到「个人主页 → 我的人偶」，
+   * 而 uni-app 的页面是独立实例，所以状态必须放在这里才能跨页共享。
+   * 用户不会频繁改身型，所以编辑是低频入口，但状态要一直带着。
+   */
+  bodyState: createBodyState('female') as BodyState,
+  /** 是否已完成过首次创建（决定「我的人偶」显示"创建"还是"修改"） */
+  personaCreated: false,
   /**
    * 从「穿搭建议」页点「在 3D 人偶上试穿」时写入，
    * 3D 试穿台 onShow 时读取并清空 —— 这是 uni-app 下最省事的跨页传参方式。
    */
   pendingOutfit: null as string[] | null,
 })
+
+const STORAGE_KEY = 'cda.bodyState.v1'
+
+/** 把身型状态同步到派生档案，并落盘 */
+export function commitBodyState(next: BodyState): void {
+  store.bodyState = next
+  Object.assign(store.body, deriveProfile(next))
+  store.personaCreated = true
+  try {
+    uni.setStorageSync(STORAGE_KEY, JSON.stringify(next))
+  } catch {
+    // 存储不可用（隐私模式等）不应影响使用，静默降级
+  }
+}
+
+/** 启动时恢复上次保存的身型 */
+export function restoreBodyState(): void {
+  try {
+    const raw = uni.getStorageSync(STORAGE_KEY)
+    if (!raw) return
+    const parsed = JSON.parse(raw as string) as BodyState
+    if (parsed && parsed.frame && typeof parsed.adiposity === 'number') {
+      store.bodyState = parsed
+      Object.assign(store.body, deriveProfile(parsed))
+      store.personaCreated = true
+    }
+  } catch {
+    // 解析失败就用默认值
+  }
+}
 
 export function addWardrobeItem(input: {
   productId: string
@@ -47,4 +90,9 @@ export function removeWardrobeItem(id: string): void {
 /** 同一件商品是否已在衣橱里（避免重复添加） */
 export function hasProduct(productId: string): boolean {
   return store.wardrobe.some((w) => w.productId === productId)
+}
+
+/** 当前身型对应的性别（供按性别取网格用） */
+export function currentGender(): Gender {
+  return store.bodyState.gender
 }

@@ -1,39 +1,32 @@
 {
-  "pages": [
+    "pages": [
     {
       "path": "pages/index/index",
-      "style": {
-        "navigationBarTitleText": "搭 · CDA",
-        "navigationStyle": "custom"
-      }
+      "style": { "navigationBarTitleText": "搭 · CDA" }
+    },
+    {
+      "path": "pages/persona/persona",
+      "style": { "navigationBarTitleText": "我的人偶" }
+    },
+    {
+      "path": "pages/profile/profile",
+      "style": { "navigationBarTitleText": "个人主页" }
     },
     {
       "path": "pages/tryon/tryon",
-      "style": {
-        "navigationBarTitleText": "2D AI 试穿",
-        "navigationStyle": "custom"
-      }
+      "style": { "navigationBarTitleText": "2D AI 试穿" }
     },
     {
       "path": "pages/wardrobe/wardrobe",
-      "style": {
-        "navigationBarTitleText": "我的衣橱",
-        "navigationStyle": "custom"
-      }
+      "style": { "navigationBarTitleText": "我的衣橱" }
     },
     {
       "path": "pages/import/import",
-      "style": {
-        "navigationBarTitleText": "拍照导入单品",
-        "navigationStyle": "custom"
-      }
+      "style": { "navigationBarTitleText": "拍照导入单品" }
     },
     {
       "path": "pages/outfit/outfit",
-      "style": {
-        "navigationBarTitleText": "穿搭建议",
-        "navigationStyle": "custom"
-      }
+      "style": { "navigationBarTitleText": "穿搭建议" }
     }
   ],
   "globalStyle": {
