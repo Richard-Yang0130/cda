@@ -531,8 +531,16 @@ export class MeshBody implements BodySurface {
       const a = seg.refA.clone()
       let len = seg.refLen * boneScale(seg)
       if (seg.bone === 'arm' && seg.side !== 0) {
-        // 肩宽驱动手臂轴的起点（与 buildSkeleton 的 0.86 系数保持一致）
-        a.x = (seg.side * (profile.shoulderWidthCm / 200) * 0.86) / heightM
+        /*
+         * ⚠️ 必须用**比值**，不能用绝对位置。
+         *
+         * 曾经写成 (shoulderWidthCm/200)*0.86/heightM —— 对默认男性算得
+         * 0.109（归一化），而网格自身的肩关节在 0.051，**差了一倍**，
+         * 等于把手臂从躯干上撕开，头部也被牵连崩坏。
+         * 那条公式是给 SDF 骨架用的（那具身体按测量值生成），
+         * 网格有自己的比例，只能按比值缩放。
+         */
+        a.x = seg.refA.x * (profile.shoulderWidthCm / neutral.shoulderWidthCm)
       }
       if (seg.bone === 'head') {
         // 颈长是「把头顶往上推」，不是把头放大 —— 所以只平移、不缩放
