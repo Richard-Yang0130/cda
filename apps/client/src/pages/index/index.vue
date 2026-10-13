@@ -13,6 +13,7 @@
         <text class="brand-en">CDA</text>
       </view>
       <text class="subtitle">身型 → 人偶 → 拖拽穿搭 → 精细穿法</text>
+    </view>
 
     <!-- ───────────── 3D 舞台 ───────────── -->
     <view
