@@ -12,6 +12,7 @@ import {
   formatUserCode, DEFAULT_PRIVACY,
   type Address, type BodyState, type Gender, type UserProfile, type WardrobeItem,
 } from '@cda/core'
+import { api, getToken, setToken } from '@/api/client'
 
 let seq = 0
 
@@ -103,6 +104,25 @@ export function hasProduct(productId: string): boolean {
 
 const USER_KEY = 'cda.user.v1'
 
+/**
+ * 用后端返回的用户对象覆盖本地状态。
+ * 后端字段与前端保持一致（都在 core 的 UserProfile 里定义），
+ * 所以这里不做字段映射，只补默认值。
+ */
+export function applyServerUser(u: Partial<UserProfile> | null): void {
+  if (!u) return
+  store.user = { ...DEFAULT_PRIVACY_USER(), ...u } as UserProfile
+  try {
+    uni.setStorageSync(USER_KEY, JSON.stringify(store.user))
+  } catch {
+    /* 忽略 */
+  }
+}
+
+function DEFAULT_PRIVACY_USER(): Partial<UserProfile> {
+  return { privacy: { ...DEFAULT_PRIVACY }, status: 'active' }
+}
+
 /** 注册完成：写入用户并落盘 */
 export function commitUser(u: UserProfile): void {
   store.user = u
@@ -177,8 +197,29 @@ export function defaultAddress(): Address | undefined {
   return store.addresses.find((a) => a.isDefault) ?? store.addresses[0]
 }
 
+/**
+ * 登出。
+ * 先通知后端作废 token，再清本地 —— 顺序反了的话，
+ * 本地 token 已丢，后端那条 session 就永远留在库里了。
+ */
+export async function logoutAndClear(): Promise<void> {
+  try {
+    if (getToken()) await api.logout()
+  } catch {
+    // 网络失败也照常清本地，不能让用户卡在登录态
+  }
+  setToken('')
+  store.user = null
+  try {
+    uni.removeStorageSync(USER_KEY)
+  } catch {
+    /* 忽略 */
+  }
+}
+
 export function logout(): void {
   store.user = null
+  setToken('')
   try {
     uni.removeStorageSync(USER_KEY)
   } catch {

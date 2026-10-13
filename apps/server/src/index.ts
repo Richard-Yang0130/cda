@@ -11,8 +11,8 @@
  *   CDA_INVITES  初始邀请码，逗号分隔（仅首次运行时写入）
  */
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
-import { mkdirSync } from 'node:fs'
-import { dirname } from 'node:path'
+import { mkdirSync, readFileSync, existsSync, statSync } from 'node:fs'
+import { dirname, join, normalize, extname } from 'node:path'
 import {
   openDb, hashPassword, verifyPassword, formatUserCode, nextUserSeq,
   nowIso, newId, newToken,
@@ -663,6 +663,53 @@ route('DELETE', '/api/wardrobe/:id', true, (req, res) => {
   json(res, 200, { ok: true })
 })
 
+// ── 静态文件 ──────────────────────────────────────────
+
+const WEB_ROOT = process.env.CDA_WEB ?? '../client/dist/build/h5'
+const MIME: Record<string, string> = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'application/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.ico': 'image/x-icon',
+  // 3D 网格是二进制大文件，必须给对类型并允许长缓存
+  '.obj': 'application/octet-stream',
+  '.glb': 'model/gltf-binary',
+}
+
+function serveStatic(pathname: string, res: ServerResponse): void {
+  const rel = pathname === '/' ? 'index.html' : decodeURIComponent(pathname).replace(/^\//, '')
+  // 防目录穿越：规范化后必须仍在 WEB_ROOT 内
+  const full = normalize(join(WEB_ROOT, rel))
+  const rootAbs = normalize(WEB_ROOT)
+  if (!full.startsWith(rootAbs)) return fail(res, 403, '禁止访问')
+
+  let target = full
+  if (!existsSync(target) || statSync(target).isDirectory()) {
+    // hash 路由：找不到的路径一律回落到 index.html
+    target = join(WEB_ROOT, 'index.html')
+    if (!existsSync(target)) {
+      return fail(res, 404, '前端尚未构建（先跑 pnpm build）')
+    }
+  }
+  try {
+    const buf = readFileSync(target)
+    const type = MIME[extname(target).toLowerCase()] ?? 'application/octet-stream'
+    const headers: Record<string, string> = { 'content-type': type, 'content-length': String(buf.length) }
+    // 带内容哈希的资源可长缓存；index.html 必须每次校验
+    headers['cache-control'] = target.endsWith('index.html')
+      ? 'no-cache'
+      : 'public, max-age=2592000'
+    res.writeHead(200, headers)
+    res.end(buf)
+  } catch {
+    fail(res, 500, '读取静态文件失败')
+  }
+}
+
 // ── 服务 ──────────────────────────────────────────────
 
 const server = createServer(async (rawReq, res) => {
@@ -678,6 +725,13 @@ const server = createServer(async (rawReq, res) => {
   req.params = {}
 
   if (url.pathname === '/api/health') return json(res, 200, { ok: true, ts: nowIso() })
+
+  // ── 静态前端 ──
+  // 由后端一起托管前端，前后端同源：只需暴露一个端口、一条隧道，
+  // 前端默认的 /api 就能直接用，也不用处理跨域。
+  if (!url.pathname.startsWith('/api')) {
+    return serveStatic(url.pathname, res)
+  }
 
   const match = routes.find((r) => r.method === req.method && r.re.test(url.pathname))
   if (!match) return fail(res, 404, `无此接口：${req.method} ${url.pathname}`)

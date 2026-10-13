@@ -234,6 +234,13 @@
           </view>
         </view>
 
+        <text class="lab">设置密码（至少 6 位）</text>
+        <input v-model="password" class="inp" password placeholder="用于登录" placeholder-class="ph" :maxlength="32" />
+
+        <text class="lab">邀请码</text>
+        <input v-model="inviteCode" class="inp" placeholder="内测邀请码（如 BETA-001）" placeholder-class="ph" :maxlength="32" />
+        <text class="esthint">内测阶段需要邀请码 —— 短信与微信登录需企业资质，暂未开通</text>
+
         <view class="summary">
           <text class="smt">确认信息</text>
           <view class="smrow"><text class="smk">昵称</text><text class="smv">{{ draft.nickname }}</text></view>
@@ -251,8 +258,8 @@
       <view v-if="step > 1" class="btn ghost" @click="step--"><text>上一步</text></view>
       <!-- 第 5 步是选填，给出明确的跳过入口 -->
       <view v-if="step === 5" class="btn ghost" @click="skipBrands"><text>跳过</text></view>
-      <view class="btn" :class="{ dis: !gate.ok }" @click="next">
-        <text>{{ step === 6 ? '完成注册' : '下一步' }}</text>
+      <view class="btn" :class="{ dis: !gate.ok || (step === 6 && password.length < 6) }" @click="next">
+        <text>{{ step === 6 ? (submitting ? '提交中…' : '完成注册') : '下一步' }}</text>
       </view>
     </view>
     <text v-if="!gate.ok && gate.reason" class="gate">{{ gate.reason }}</text>
@@ -268,7 +275,8 @@ import {
   recommendBrands, searchBrands, DEFAULT_PRIVACY, estimateGirths,
   type LoginMethod, type RegisterDraft, type UserProfile,
 } from '@cda/core'
-import { commitUser, nextUserCode } from '@/store/app-store'
+import { applyServerUser } from '@/store/app-store'
+import { api, errText, setToken } from '@/api/client'
 
 /**
  * 6 步注册流程（P0-1）。
@@ -280,6 +288,9 @@ const step = ref(1)
 const draft = reactive<RegisterDraft>(emptyDraft())
 const MAX_BRANDS = MAX_FAVORITE_BRANDS
 const brandKw = ref('')
+const password = ref('')
+const inviteCode = ref('')
+const submitting = ref(false)
 
 /* ── 手机号与验证码（演示版） ── */
 const phone = ref('')
@@ -376,6 +387,10 @@ const cur = computed(() => steps[step.value - 1]!)
 const gate = computed(() => {
   const base = canAdvance(step.value, draft, MAX_BRANDS)
   if (!base.ok) return base
+  // 第 6 步：密码至少 6 位
+  if (step.value === 6 && password.value.length < 6) {
+    return { ok: false, reason: '请设置至少 6 位密码' }
+  }
   // 第 3 步：三围有校验错误时不得继续
   if (step.value === 3 && Object.values(girthErr).some((x) => x)) {
     return { ok: false, reason: '三围填写有误，请检查' }
@@ -542,27 +557,38 @@ function next(): void {
   finish()
 }
 
-function finish(): void {
-  const now = new Date().toISOString()
-  const user: UserProfile = {
-    code: nextUserCode(),
-    status: 'active',
-    nickname: draft.nickname.trim(),
-    gender: draft.gender!,
-    birthday: draft.birthday,
-    avatarHex: draft.avatarHex,
-    styles: [...draft.styles],
-    brands: [...draft.brands],
-    loginMethod: draft.loginMethod!,
-    createdAt: now,
-    privacy: { ...DEFAULT_PRIVACY },
-    region: '中国',
-    lastSeenAt: now,
-    isOnline: true,
+/**
+ * 完成注册 —— **调后端**，不再本地生成用户码。
+ *
+ * 演示环境没有短信资质，手机号只作为账号标识，不校验验证码真伪；
+ * 真实接入短信后把 code 一起提交即可（接口已预留字段位置）。
+ */
+async function finish(): Promise<void> {
+  if (submitting.value) return
+  submitting.value = true
+  try {
+    const res = await api.register({
+      inviteCode: inviteCode.value.trim() || undefined,
+      phone: draft.loginMethod === 'phone' ? phone.value : undefined,
+      email: draft.loginMethod === 'email' ? phone.value : undefined,
+      password: password.value,
+      nickname: draft.nickname.trim(),
+      gender: draft.gender,
+      birthday: draft.birthday,
+      avatarHex: draft.avatarHex,
+      styles: draft.styles,
+      brands: draft.brands,
+      region: '中国',
+    })
+    setToken(res.token)
+    applyServerUser(res.user)
+    uni.showToast({ title: `注册成功 ${res.user.code}`, icon: 'none' })
+    setTimeout(() => uni.reLaunch({ url: '/pages/profile/profile' }), 900)
+  } catch (e) {
+    uni.showModal({ title: '注册失败', content: errText(e), showCancel: false })
+  } finally {
+    submitting.value = false
   }
-  commitUser(user)
-  uni.showToast({ title: `注册成功 ${user.code}`, icon: 'none' })
-  setTimeout(() => uni.reLaunch({ url: '/pages/profile/profile' }), 900)
 }
 </script>
 

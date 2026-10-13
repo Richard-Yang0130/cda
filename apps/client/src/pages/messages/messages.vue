@@ -76,10 +76,11 @@
 
 <script setup lang="ts">
 import NavShell from '@/components/NavShell.vue'
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { onShow } from '@dcloudio/uni-app'
 import { presenceText, type UserProfile } from '@cda/core'
 import { store } from '@/store/app-store'
+import { api, errText } from '@/api/client'
 
 /**
  * 消息页（P0-3）+ 用户搜索（P0-2）。
@@ -98,124 +99,126 @@ const draft = ref('')
 const scrollTop = ref(0)
 const active = ref<Conv | null>(null)
 
-/** 演示用的其他用户（真实实现应由搜索接口返回） */
-const peers: Array<Pick<UserProfile, 'code' | 'nickname' | 'avatarHex' | 'isOnline' | 'lastSeenAt' | 'privacy'>> = [
-  { code: 'CDA_00000007', nickname: '林', avatarHex: '#c9b8a8', isOnline: true, lastSeenAt: new Date().toISOString(), privacy: { hideFromSearch: false, hideOnlineStatus: false, hideRegion: false, allowStrangerMessage: true } },
-  { code: 'CDA_00000012', nickname: '阿泽', avatarHex: '#8fa3b0', isOnline: false, lastSeenAt: new Date(Date.now() - 3600e3).toISOString(), privacy: { hideFromSearch: false, hideOnlineStatus: false, hideRegion: false, allowStrangerMessage: true } },
-  { code: 'CDA_00000033', nickname: '小满', avatarHex: '#d3a9a0', isOnline: false, lastSeenAt: new Date(Date.now() - 86400e3 * 2).toISOString(), privacy: { hideFromSearch: false, hideOnlineStatus: false, hideRegion: false, allowStrangerMessage: true } },
-]
+/** 搜索结果（来自后端） */
+const found = ref<Array<{ id: string; name: string; code: string; hex: string; presence: string }>>([])
+const searching = ref(false)
+let searchTimer: ReturnType<typeof setTimeout> | null = null
 
-/*
- * 历史消息持久化。
- * 之前会话只存在内存里，**刷新页面聊天记录就没了** ——
- * 用户明确要求「能读历史消息记录」。
- * 真实版本由后端存；这里先落本地，接后端时只换这一层。
+/**
+ * 按昵称或用户码搜索用户。
+ * 走后端而不是本地列表 —— 本地 mock 只能搜到自己造的那几个人，
+ * 这也是「接入后端」的意义所在。
+ * 输入防抖 300ms，避免每敲一个字都打一次接口。
  */
-const CONV_KEY = 'cda.conversations.v1'
-
-function saveConvs(): void {
-  try {
-    uni.setStorageSync(CONV_KEY, JSON.stringify(convs.value))
-  } catch {
-    /* 存储不可用时静默降级，不阻断聊天 */
+watch(kw, (v) => {
+  if (searchTimer) clearTimeout(searchTimer)
+  const q = v.trim()
+  if (!q) {
+    found.value = []
+    return
   }
-}
-
-function loadConvs(): Conv[] | null {
-  try {
-    const raw = uni.getStorageSync(CONV_KEY)
-    if (!raw) return null
-    const list = JSON.parse(raw as string) as Conv[]
-    return Array.isArray(list) && list.length ? list : null
-  } catch {
-    return null
-  }
-}
-
-/** 首次进入的示例会话（仅在本地无记录时使用） */
-const seedConvs: Conv[] = [
-  {
-    id: 'c1', name: '林', code: 'CDA_00000007', hex: '#c9b8a8',
-    presence: presenceText(peers[0]!), unread: 1,
-    messages: [
-      { id: 'm1', text: '你那件白衬衫是哪家的？', time: '10:20', fromMe: false },
-      { id: 'm2', text: '基础款那件，我发链接给你', time: '10:22', fromMe: true },
-    ],
-  },
-  {
-    id: 'c2', name: '阿泽', code: 'CDA_00000012', hex: '#8fa3b0',
-    presence: presenceText(peers[1]!), unread: 0,
-    messages: [{ id: 'm3', text: '牛仔外套还有 M 码吗', time: '昨天', fromMe: false }],
-  },
-]
-
-const convs = ref<Conv[]>(seedConvs)
-
-// 页面显示时读取本地记录（这样从聊天返回列表也能看到最新消息）
-onShow(() => {
-  const saved = loadConvs()
-  if (saved) convs.value = saved
+  searchTimer = setTimeout(async () => {
+    searching.value = true
+    try {
+      const res = await api.searchUsers(q)
+      found.value = (res.users ?? []).map((u) => ({
+        id: u.code,
+        name: u.nickname,
+        code: u.code,
+        hex: u.avatarHex,
+        presence: presenceText(u),
+      }))
+    } catch (e) {
+      found.value = []
+      uni.showToast({ title: errText(e), icon: 'none' })
+    } finally {
+      searching.value = false
+    }
+  }, 300)
 })
 
-/** 搜索：昵称或用户码，且尊重对方的「不被搜索到」隐私设置 */
-const found = computed(() => {
-  const k = kw.value.trim().toLowerCase()
-  if (!k) return []
-  return peers
-    .filter((p) => !p.privacy.hideFromSearch)
-    .filter(
-      (p) =>
-        p.nickname.toLowerCase().includes(k) || p.code.toLowerCase().includes(k),
-    )
-    .map((p) => ({
-      id: p.code,
-      name: p.nickname,
-      code: p.code,
-      hex: p.avatarHex,
-      presence: presenceText(p),
-      peer: p,
+// 会话由后端提供，不再有本地示例数据（onShow 里拉取）
+const convs = ref<Conv[]>([])
+
+/**
+ * 从后端拉会话列表。
+ * 后端返回的 peer 是完整用户对象，这里映射成页面用的形状。
+ */
+async function loadConversations(): Promise<void> {
+  try {
+    const res = await api.conversations()
+    convs.value = (res.conversations ?? []).map((c) => ({
+      id: c.id,
+      name: c.peer?.nickname ?? c.peer?.code ?? '用户',
+      code: c.peer?.code ?? '',
+      hex: c.peer?.avatarHex ?? '#cccccc',
+      presence: presenceText(c.peer ?? {}),
+      unread: c.unread ?? 0,
+      messages: [],
     }))
+  } catch (e) {
+    // 未登录时后端返回 401，此时保持空列表即可，不打扰用户
+    if (!/登录/.test(errText(e))) uni.showToast({ title: errText(e), icon: 'none' })
+  }
+}
+
+onShow(() => {
+  void loadConversations()
 })
 
-function openChat(u: { id: string; name: string; code: string; hex: string; presence: string }): void {
+async function openChat(u: { id: string; name: string; code: string; hex: string; presence: string }): Promise<void> {
+  kw.value = ''
   const existing = convs.value.find((c) => c.code === u.code)
   if (existing) {
-    active.value = existing
-    existing.unread = 0
-    saveConvs()
+    await openConv(existing)
     return
   }
   const conv: Conv = {
     id: `c_${u.code}`, name: u.name, code: u.code, hex: u.hex,
     presence: u.presence, unread: 0, messages: [],
   }
-  convs.value.push(conv)
-  saveConvs()
-  active.value = conv
+  convs.value.unshift(conv)
+  await openConv(conv)
 }
 
-/** 进入会话时滚到最新一条，方便续读历史 */
-function openConv(c: Conv): void {
+/** 进入会话：从后端拉历史消息 */
+async function openConv(c: Conv): Promise<void> {
   active.value = c
   c.unread = 0
-  saveConvs()
-  // 延后触发，等消息渲染完
-  setTimeout(() => (scrollTop.value += 100000), 120)
+  scrollTop.value += 100000
+  if (!c.code) return
+  try {
+    const res = await api.messages(c.code)
+    c.messages = (res.messages ?? []).map((m) => ({
+      id: m.id,
+      text: m.text,
+      time: (m.createdAt ?? '').slice(11, 16),
+      fromMe: !!m.fromMe,
+    }))
+    setTimeout(() => (scrollTop.value += 100000), 120)
+  } catch (e) {
+    uni.showToast({ title: errText(e), icon: 'none' })
+  }
 }
 
-function send(): void {
+async function send(): Promise<void> {
   const text = draft.value.trim()
   const c = active.value
-  if (!text || !c) return
-  c.messages.push({
-    id: `m_${Date.now().toString(36)}`,
-    text,
-    time: new Date().toTimeString().slice(0, 5),
-    fromMe: true,
-  })
+  if (!text || !c || !c.code) return
   draft.value = ''
-  saveConvs() // 落盘，刷新后仍在
-  scrollTop.value += 1000 // 触发滚动到底
+  try {
+    const res = await api.sendMessage(c.code, text)
+    c.messages.push({
+      id: res.message.id,
+      text: res.message.text,
+      time: (res.message.createdAt ?? '').slice(11, 16),
+      fromMe: true,
+    })
+    scrollTop.value += 100000
+  } catch (e) {
+    draft.value = text // 失败时把内容还回输入框，别让用户白打一遍
+    uni.showToast({ title: errText(e), icon: 'none' })
+  }
 }
 
 function openPeer(): void {
