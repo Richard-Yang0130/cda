@@ -106,11 +106,7 @@ function doSearch(): void {
 }
 
 function openPost(po: Post): void {
-  if (po.linkedProductId) {
-    uni.showToast({ title: `帖子关联单品：${po.linkedProductId}`, icon: 'none' })
-  } else {
-    uni.showToast({ title: '帖子详情待实现', icon: 'none' })
-  }
+  uni.navigateTo({ url: `/pages/post/post?id=${po.id}` })
 }
 </script>
 
