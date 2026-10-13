@@ -9,6 +9,10 @@
       "style": { "navigationStyle": "custom", "navigationBarTitleText": "3D 试穿" }
     },
     {
+      "path": "pages/publish/publish",
+      "style": { "navigationStyle": "custom" }
+    },
+    {
       "path": "pages/post/post",
       "style": { "navigationStyle": "custom" }
     },

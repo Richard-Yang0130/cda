@@ -7,10 +7,10 @@
         v-for="it in items"
         :key="it.url"
         class="side-item"
-        :class="{ on: current === it.url }"
+        :class="{ on: current === it.url, plus: it.plus }"
         @click="go(it.url)"
       >
-        <text class="si-label">{{ it.label }}</text>
+        <text class="si-label">{{ it.plus ? '＋ 发布' : it.label }}</text>
       </view>
     </view>
 
@@ -25,10 +25,11 @@
         v-for="it in items"
         :key="it.url"
         class="tab"
-        :class="{ on: current === it.url }"
+        :class="{ on: current === it.url, plus: it.plus }"
         @click="go(it.url)"
       >
-        <text class="tab-label">{{ it.short }}</text>
+        <view v-if="it.plus" class="plus-btn"><text class="plus-mark">+</text></view>
+        <text v-else class="tab-label">{{ it.short }}</text>
       </view>
     </view>
   </view>
@@ -49,11 +50,15 @@ import { ref } from 'vue'
 const props = defineProps<{ current?: string }>()
 const current = ref(props.current ?? '')
 
+/**
+ * 导航项。中间那个是「发布」，渲染成圆形 + 号 —— 闲鱼式的主操作按钮。
+ * 「拍照导入」已并入衣橱（两者重复），不再单独占一个导航位。
+ */
 const items = [
   { label: '首页 · 发现', short: '首页', url: '/pages/home/home' },
   { label: '3D 试穿', short: '试穿', url: '/pages/index/index' },
+  { label: '发布', short: '＋', url: '/pages/publish/publish', plus: true },
   { label: '我的衣橱', short: '衣橱', url: '/pages/wardrobe/wardrobe' },
-  { label: '拍照导入', short: '导入', url: '/pages/import/import' },
   { label: '个人主页', short: '我的', url: '/pages/profile/profile' },
 ]
 
@@ -97,6 +102,30 @@ function go(url: string): void {
 .tab-label {
   font-size: 12px;
   color: #9a9a9a;
+}
+.tab.plus .plus-btn {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  background: #1a1a1a;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: -14px;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.22);
+}
+.plus-mark {
+  color: #fff;
+  font-size: 24px;
+  line-height: 24px;
+  margin-top: -2px;
+}
+.side-item.plus {
+  background: #f2f2f2;
+}
+.side-item.plus .si-label {
+  color: #1a1a1a;
+  font-weight: 600;
 }
 .tab.on .tab-label {
   color: #1a1a1a;

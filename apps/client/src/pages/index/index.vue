@@ -13,14 +13,6 @@
         <text class="brand-en">CDA</text>
       </view>
       <text class="subtitle">身型 → 人偶 → 拖拽穿搭 → 精细穿法</text>
-      <view class="entry-grid">
-        <view class="entry-btn" @click="goProfile"><text>个人主页</text></view>
-        <view class="entry-btn" @click="goWardrobe"><text>我的衣橱</text></view>
-        <view class="entry-btn" @click="goOutfit"><text>穿搭建议</text></view>
-        <view class="entry-btn" @click="goImport"><text>拍照导入</text></view>
-        <view class="entry-btn" @click="goTryOn"><text>2D 试穿</text></view>
-      </view>
-    </view>
 
     <!-- ───────────── 3D 舞台 ───────────── -->
     <view

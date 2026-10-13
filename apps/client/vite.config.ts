@@ -33,5 +33,14 @@ export default defineConfig({
     // 监听 0.0.0.0 以便手机在同一局域网内访问（发给用户试用）
     host: '0.0.0.0',
     port: 5173,
+    /*
+     * 允许公网隧道域名访问。
+     *
+     * Vite 默认只接受本机/局域网主机名，通过隧道访问会返回 403
+     * 「Blocked request. This host is not allowed」。
+     * 这里放开全部主机 —— 仅适用于 demo 隧道场景；
+     * 正式部署应由反向代理限定 Host，不要沿用这个设置。
+     */
+    allowedHosts: true,
   },
 })
