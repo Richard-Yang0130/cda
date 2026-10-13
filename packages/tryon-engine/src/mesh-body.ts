@@ -156,6 +156,38 @@ function median(a: number[]): number {
   return s[s.length >> 1]!
 }
 
+/**
+ * 从 OBJ 文本构建顶点邻接表。
+ *
+ * 为什么要邻接表：蒙皮权重必须在**网格拓扑**上扩散平滑，
+ * 而不是按空间距离硬分。几何位置相近不代表属于同一体段
+ * （例如腋下、胯下），只有沿网格表面扩散才能得到连续、无跳变的权重。
+ */
+function buildAdjacency(objText: string): number[][] {
+  const sets: Array<Set<number> | undefined> = []
+  const push = (a: number, b: number) => {
+    ;(sets[a] ??= new Set()).add(b)
+    ;(sets[b] ??= new Set()).add(a)
+  }
+  for (const line of objText.split('\n')) {
+    if (line.charCodeAt(0) !== 102 /* f */) continue
+    const parts = line.split(/\s+/)
+    const idx: number[] = []
+    for (let i = 1; i < parts.length; i++) {
+      const t = parts[i]
+      if (!t) continue
+      const slash = t.indexOf('/')
+      idx.push(parseInt(slash < 0 ? t : t.slice(0, slash), 10) - 1)
+    }
+    for (let i = 1; i < idx.length - 1; i++) {
+      push(idx[0]!, idx[i]!)
+      push(idx[i]!, idx[i + 1]!)
+      push(idx[0]!, idx[i + 1]!)
+    }
+  }
+  return sets.map((x) => (x ? [...x] : []))
+}
+
 export class MeshBody implements BodySurface {
   readonly object3D: THREE.Object3D
   private readonly mesh: THREE.Mesh
@@ -166,11 +198,16 @@ export class MeshBody implements BodySurface {
   private readonly segments: MeshSegment[] = []
   private profile: BodyProfile
 
+  /** 顶点邻接表。蒙皮权重要在它上面做扩散平滑 —— 这是自动蒙皮的关键一步 */
+  private readonly adj: number[][]
+
   private constructor(
     obj: THREE.Object3D,
     profile: BodyProfile,
     spec: MeshBodySpec,
+    adj: number[][] = [],
   ) {
+    this.adj = adj
     this.profile = profile
     // 取第一个网格
     let found: THREE.Mesh | null = null
@@ -226,7 +263,7 @@ export class MeshBody implements BodySurface {
     if (!res.ok) throw new Error(`[CDA] 网格加载失败 ${res.status}: ${url}`)
     const text = await res.text()
     const obj = new OBJLoader().parse(text)
-    return new MeshBody(obj, profile, { url, gender })
+    return new MeshBody(obj, profile, { url, gender }, buildAdjacency(text))
   }
 
     // ────────────────────────────────────────────────────────
@@ -570,105 +607,112 @@ export class MeshBody implements BodySurface {
     const pos = this.geo.getAttribute('position') as THREE.BufferAttribute
     const arr = pos.array as Float32Array
     const base = this.base
+    const nV = base.length / 3
+    const nS = this.segments.length
+
+    /*
+     * ── 蒙皮：三段式 ──
+     *
+     * 1) 几何初始化：按 score = 垂距/该处参考半径 给每个顶点算出各段权重
+     * 2) **在网格拓扑上扩散平滑**（关键一步）
+     * 3) 归一化后做 LBS 重建
+     *
+     * 为什么必须做第 2 步：光靠几何分数分权重，在细窄过渡区
+     * （颈部、腋下、胯下）会出现跳变 —— 相邻顶点拿到完全不同的权重，
+     * 表面就被撕出尖刺。前面反复试过硬阈值、加段，都不解决，
+     * 因为问题不在阈值而在「权重本身不是空间连续的」。
+     * 沿网格边扩散能让权重自然连续，这也是自动蒙皮的标准做法。
+     */
+    const W = new Float32Array(nV * nS)
+    const mask = new Uint8Array(nV * nS)
+    const tRawA = new Float32Array(nV * nS)
+    const scoreA = new Float32Array(nV * nS)
     const v = new THREE.Vector3()
-    const wSum: number[] = []
-    const scored: Array<{ seg: MeshSegment; s: ReturnType<MeshBody['segScore']> }> = []
 
-    for (let i = 0; i < base.length; i += 3) {
-      v.set(base[i]!, base[i + 1]!, base[i + 2]!)
-      scored.length = 0
-      wSum.length = 0
-      let total = 0
-      for (const seg of this.segments) {
-        const sc = this.segScore(seg, v)
-        // 权重 = 1/score^p。p 取 5：最近的那段压倒性主导，
-        // 同时过渡仍是连续的，不会像硬切那样撕裂。
-        const w = 1 / (Math.pow(sc.score, 5) + 1e-3)
-        scored.push({ seg, s: sc })
-        wSum.push(w)
-        total += w
+    for (let i = 0; i < nV; i++) {
+      v.set(base[i * 3]!, base[i * 3 + 1]!, base[i * 3 + 2]!)
+      let best = Infinity
+      for (let k = 0; k < nS; k++) {
+        const sc = this.segScore(this.segments[k]!, v)
+        scoreA[i * nS + k] = sc.score
+        tRawA[i * nS + k] = sc.tRaw
+        if (sc.score < best) best = sc.score
       }
-      if (total <= 0) {
-        arr[i] = v.x * heightM
-        arr[i + 1] = v.y * heightM
-        arr[i + 2] = v.z * heightM
-        continue
+      for (let k = 0; k < nS; k++) {
+        const sc = scoreA[i * nS + k]!
+        // 远端段直接屏蔽；剩下的交给扩散平滑
+        if (sc > best * 3.0) continue
+        mask[i * nS + k] = 1
+        W[i * nS + k] = 1 / (Math.pow(sc, 5) + 1e-3)
       }
-      /*
-       * ⚠️ 只混合**位移量**，绝不能混合「轴心 + 缩放后垂距」的绝对位置。
-       *
-       * 各段的轴心相距很远（一个躯干顶点也会被腿段的轴心算出一个分数），
-       * 把绝对位置加权平均，结果会被远端的轴心拽走 ——
-       * 人偶直接揉成一团。位移量在增益接近 1 时本来就很小，
-       * 混合它才是安全的。
-       */
-      /*
-       * 混合的是**标量增益**，再沿主导段的垂距方向位移。
-       *
-       * ⚠️ 不能混合「位移向量」。各段的 perp 方向互不相同（各自垂直于不同的轴），
-       * 向量相加会互相抵消变短，表面被拉向内侧 —— 这就是模型上那些**凹陷**
-       * 的来源，也是线性混合蒙皮的老问题。混合标量保证位移严格沿径向。
-       */
-      /*
-       * ── 位置重建必须**混合**，且只混合相邻段 ──
-       *
-       * 只用「最优段」重建会让相邻顶点从不同轴心重建，位置突然跳开，
-       * 边被拉伸几十倍、表面长出尖刺。审计脚本实测：
-       *   male 身高min 最大拉伸 33.0×、异常边 82
-       *   male calfCm=min 15.1×、异常边 678 —— 几乎每个用例都有几百条坏边。
-       *
-       * 但也不能让所有段都参与混合：曾经这样做出过「揉成一团」，
-       * 因为躯干顶点会被腿段的远轴心拽走。
-       * 正确做法：**只让 score 与最优值可比的段参与**（轴心彼此相邻），
-       * 权重按 1/score^p 分配，远端段直接排除。
-       */
-      let bestScore = Infinity
-      for (const sc of scored) if (sc.s.score < bestScore) bestScore = sc.s.score
+    }
 
-      const px = new THREE.Vector3()
-      const accP = new THREE.Vector3()
-      let wSum2 = 0
-      for (let k = 0; k < scored.length; k++) {
-        const { seg, s: sc } = scored[k]!
-        /*
-         * 参与权重必须是**平滑**衰减的，不能用硬阈值。
-         * 阈值一硬，参与混合的段集合就会突变，那本身就是一处离散跳变
-         * （审计里表现为骨骼参数一动就出现局部离群）。
-         */
-        const scRatio = sc.score / Math.max(bestScore, 1e-6)
-        if (scRatio > 2.6) continue
-        const fade = 1 - (() => {
-          const t2 = Math.min(1, Math.max(0, (scRatio - 1.4) / 1.2))
-          return t2 * t2 * (3 - 2 * t2)
-        })()
-        const g = gainOf(seg.name, sc.t)
-        const dep = depositOf(seg.name, sc.t, LEVELS.crotch + sc.t * (LEVELS.shoulder + 0.03 - LEVELS.crotch))
-        let mod = 1
-        const plen = sc.perp.length()
-        if (dep && plen > 1e-9) {
-          const axis = seg.refDir
-          const zRef = new THREE.Vector3(0, 0, 1)
-          const fwd = zRef.clone().addScaledVector(axis, -zRef.dot(axis))
-          if (fwd.lengthSq() < 1e-6) fwd.set(1, 0, 0)
-          fwd.normalize()
-          const sideV = new THREE.Vector3().crossVectors(axis, fwd).normalize()
-          const nz = sc.perp.dot(fwd) / plen
-          const nx = sc.perp.dot(sideV) / plen
-          const mean = depositMean(dep)
-          mod = mean > 1e-6 ? depositWeight(dep, nx, nz) / mean : 1
+    // ── 2) 沿网格边扩散平滑 ──
+    if (this.adj.length === nV) {
+      const tmp = new Float32Array(W.length)
+      const ITER = 6
+      const LAMBDA = 0.5
+      for (let it = 0; it < ITER; it++) {
+        tmp.set(W)
+        for (let i = 0; i < nV; i++) {
+          const nb = this.adj[i]!
+          if (!nb.length) continue
+          const inv = LAMBDA / nb.length
+          for (let k = 0; k < nS; k++) {
+            let sum = 0
+            for (let j = 0; j < nb.length; j++) sum += tmp[nb[j]! * nS + k]!
+            // 屏蔽段不参与，避免远处影响被扩散回来
+            W[i * nS + k] = mask[i * nS + k]
+              ? tmp[i * nS + k]! * (1 - LAMBDA) + sum * inv
+              : 0
+          }
         }
-        // 从该段的目标轴重建位置
-        px.copy(seg.a).addScaledVector(seg.dir, sc.tRaw * seg.len)
-        px.addScaledVector(sc.perp, 1 + (g - 1) * mod)
-        const w = (1 / (Math.pow(sc.score, 5) + 1e-3)) * fade
-        accP.addScaledVector(px, w)
-        wSum2 += w
       }
-      if (wSum2 > 0) accP.divideScalar(wSum2)
-      else accP.copy(v)
-      arr[i] = accP.x * heightM
-      arr[i + 1] = accP.y * heightM
-      arr[i + 2] = accP.z * heightM
+    }
+
+    // ── 3) 归一化 + LBS 重建 ──
+    const px = new THREE.Vector3()
+    const acc = new THREE.Vector3()
+    for (let i = 0; i < nV; i++) {
+      v.set(base[i * 3]!, base[i * 3 + 1]!, base[i * 3 + 2]!)
+      let total = 0
+      for (let k = 0; k < nS; k++) total += W[i * nS + k]!
+      if (total <= 1e-9) {
+        acc.copy(v)
+      } else {
+        acc.set(0, 0, 0)
+        for (let k = 0; k < nS; k++) {
+          const wk = W[i * nS + k]!
+          if (wk <= 0) continue
+          const seg = this.segments[k]!
+          const rel = new THREE.Vector3().subVectors(v, seg.refA)
+          const proj = rel.dot(seg.refDir)
+          const perp = rel.addScaledVector(seg.refDir, -proj)
+          const t = Math.min(1, Math.max(0, proj / Math.max(seg.refLen, 1e-6)))
+          const g = gainOf(seg.name, t)
+          const dep = depositOf(seg.name, t, LEVELS.crotch + t * (LEVELS.shoulder + 0.03 - LEVELS.crotch))
+          let mod = 1
+          const plen = perp.length()
+          if (dep && plen > 1e-9) {
+            const axis = seg.refDir
+            const zRef = new THREE.Vector3(0, 0, 1)
+            const fwd = zRef.clone().addScaledVector(axis, -zRef.dot(axis))
+            if (fwd.lengthSq() < 1e-6) fwd.set(1, 0, 0)
+            fwd.normalize()
+            const sideV = new THREE.Vector3().crossVectors(axis, fwd).normalize()
+            const nz = perp.dot(fwd) / plen
+            const nx = perp.dot(sideV) / plen
+            const mean = depositMean(dep)
+            mod = mean > 1e-6 ? depositWeight(dep, nx, nz) / mean : 1
+          }
+          px.copy(seg.a).addScaledVector(seg.dir, tRawA[i * nS + k]! * seg.len)
+          px.addScaledVector(perp, 1 + (g - 1) * mod)
+          acc.addScaledVector(px, wk / total)
+        }
+      }
+      arr[i * 3] = acc.x * heightM
+      arr[i * 3 + 1] = acc.y * heightM
+      arr[i * 3 + 2] = acc.z * heightM
     }
 
     pos.needsUpdate = true
@@ -694,7 +738,7 @@ export class MeshBody implements BodySurface {
   /** 从 OBJ 文本构建（审计脚本在 Node 里用，避免依赖 fetch 与浏览器） */
   static loadFromText(text: string, profile: BodyProfile, gender: 'male' | 'female'): MeshBody {
     const obj = new OBJLoader().parse(text)
-    return new MeshBody(obj, profile, { url: '(inline)', gender })
+    return new MeshBody(obj, profile, { url: '(inline)', gender }, buildAdjacency(text))
   }
 
   /** 变形后的顶点坐标（审计脚本用来做几何检测） */
