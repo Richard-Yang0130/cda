@@ -225,7 +225,7 @@ import {
   findProduct, CATEGORY_LABEL, BODY_BUILDS,
   createBodyState, deriveProfile, weightAt, girthAt, rangeOf,
   setHeight, setWeight, setGirth, setFrame, setGender as setGenderState,
-  healthMetrics, GIRTH_KEYS,
+  healthMetrics, GIRTH_KEYS, FRAME_RANGES, HEIGHT_RANGE, WEIGHT_RANGE,
   type BodyBuildId, type BodyState, type Category, type FrameKey,
   type GirthKey, type WearMode,
 } from '@cda/core'
@@ -260,16 +260,8 @@ interface MeasureField {
   unit: string
 }
 
-/** 骨骼维度：与体脂无关，范围是固定的 */
-const FRAME_RANGES: Record<FrameKey, { min: number; max: number }> = {
-  shoulderWidthCm: { min: 34, max: 52 },
-  neckLengthCm: { min: 6, max: 15 },
-  torsoLengthCm: { min: 36, max: 58 },
-  upperArmCm: { min: 24, max: 38 },
-  forearmCm: { min: 20, max: 32 },
-  thighCm: { min: 36, max: 56 },
-  calfCm: { min: 30, max: 48 },
-}
+// 骨骼维度与身高体重范围统一由 @cda/core 提供 —— UI 与模型必须共用同一份，
+// 否则模型夹紧用的范围与滑杆显示的范围会不一致（越界 bug 的成因）
 
 const girthSet = new Set<string>(GIRTH_KEYS)
 
@@ -325,14 +317,11 @@ function fieldValue(key: FieldKey): number {
 
 /** 取某项的可拖范围。围度与体重的范围是**派生**的，不是写死的 */
 function fieldRange(key: FieldKey): { min: number; max: number } {
-  if (key === 'heightCm') {
-    // 按性别收窄到真实区间（极端体型看起来异常，且不是主流场景）
-    return state.gender === 'male' ? { min: 165, max: 195 } : { min: 155, max: 180 }
-  }
+  if (key === 'heightCm') return HEIGHT_RANGE[state.gender]
   if (key === 'weightKg') {
     // BMI 导出的范围 ∩ 绝对值范围，两者都要满足
     const w = rangeOf(state, 'weightKg')
-    const abs = state.gender === 'male' ? { min: 55, max: 100 } : { min: 40, max: 90 }
+    const abs = WEIGHT_RANGE[state.gender]
     return { min: Math.max(w.min, abs.min), max: Math.min(w.max, abs.max) }
   }
   if (girthSet.has(key)) return rangeOf(state, key as GirthKey)

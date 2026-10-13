@@ -161,6 +161,37 @@ export const FRAME_KEYS: FrameKey[] = [
   'upperArmCm', 'forearmCm', 'thighCm', 'calfCm',
 ]
 
+/**
+ * 各参数的可拖动范围 —— **唯一的真相来源**。
+ *
+ * ⚠️ 这些范围原先只定义在 UI（index.vue 的 FRAME_RANGES），模型层拿不到，
+ * 于是 setHeight 按身高比例缩放骨骼参数时**无法夹紧**：
+ *   肩宽 52 × 1.18（身高 165→195）= 61，超出滑块上限 52。
+ * 用户看到的现象就是「部分身型数据联动越界」。
+ * 现在范围提到模型层，UI 与模型共用同一份。
+ */
+export const HEIGHT_RANGE: Record<Gender, { min: number; max: number }> = {
+  male: { min: 165, max: 195 },
+  female: { min: 155, max: 180 },
+}
+
+export const WEIGHT_RANGE: Record<Gender, { min: number; max: number }> = {
+  male: { min: 55, max: 100 },
+  female: { min: 40, max: 90 },
+}
+
+export const FRAME_RANGES: Record<FrameKey, { min: number; max: number }> = {
+  shoulderWidthCm: { min: 34, max: 52 },
+  neckLengthCm: { min: 6, max: 15 },
+  torsoLengthCm: { min: 36, max: 58 },
+  upperArmCm: { min: 24, max: 38 },
+  forearmCm: { min: 22, max: 32 },
+  thighCm: { min: 36, max: 56 },
+  calfCm: { min: 30, max: 48 },
+}
+
+const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v))
+
 export interface BodyState {
   gender: Gender
   build: BodyBuildId
@@ -280,10 +311,16 @@ export function deriveProfile(state: BodyState): BodyProfile {
 
 /** 改身高：骨骼维度与围度都按比例重算，体重随 BMI 重新派生 */
 export function setHeight(state: BodyState, heightCm: number): BodyState {
-  const next = { ...state, heightCm, frame: { ...state.frame } }
+  const h = clamp(heightCm, HEIGHT_RANGE[state.gender].min, HEIGHT_RANGE[state.gender].max)
+  const next = { ...state, heightCm: h, frame: { ...state.frame } }
   // 骨骼长度是身高的固定比例（除非用户单独覆盖过，这里按比例缩放）
-  const ratio = heightCm / state.heightCm
-  for (const k of FRAME_KEYS) next.frame[k] = Math.round(state.frame[k] * ratio * 10) / 10
+  const ratio = h / state.heightCm
+  for (const k of FRAME_KEYS) {
+    const r = FRAME_RANGES[k]
+    // ⚠️ 必须夹紧：按比例放大后可能超出该参数的允许范围，
+    // 那样滑杆显示值与实际状态就不一致了。
+    next.frame[k] = Math.round(clamp(state.frame[k] * ratio, r.min, r.max) * 10) / 10
+  }
   return next
 }
 
@@ -300,7 +337,8 @@ export function setWeight(state: BodyState, weightKg: number): BodyState {
 
 /** 改骨骼维度：与体脂无关，只动这一项 */
 export function setFrame(state: BodyState, key: FrameKey, valueCm: number): BodyState {
-  return { ...state, frame: { ...state.frame, [key]: valueCm } }
+  const r = FRAME_RANGES[key]
+  return { ...state, frame: { ...state.frame, [key]: Math.round(clamp(valueCm, r.min, r.max) * 10) / 10 } }
 }
 
 /** 换性别 / 形体风格 */
