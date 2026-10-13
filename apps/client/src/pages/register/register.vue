@@ -50,20 +50,32 @@
         <template v-else>
           <view class="backline" @click="codeSent = false"><text>‹ 修改手机号</text></view>
           <text class="lab">验证码已发送至 +86 {{ phone }}</text>
-          <view class="codeboxes">
-            <view v-for="i in 6" :key="i" class="cbox" :class="{ filled: codeInput.length >= i, cur: codeInput.length === i - 1 }">
-              <text class="cdigit">{{ codeInput[i - 1] ?? '' }}</text>
+          <!--
+            验证码输入：**真实输入框透明覆盖在 6 个格子上**。
+            ⚠️ 曾经把输入框放在 left:-9999px 的屏幕外，且格子没有点击聚焦，
+            结果是**用户点哪都输不进去** —— 验证码步骤直接卡死。
+            覆盖式布局在 H5 与小程序都可靠：点格子等于点输入框。
+          -->
+          <view class="codewrap">
+            <view class="codeboxes">
+              <view
+                v-for="i in 6"
+                :key="i"
+                class="cbox"
+                :class="{ filled: codeInput.length >= i, cur: codeInput.length === i - 1 }"
+              >
+                <text class="cdigit">{{ codeInput[i - 1] ?? '' }}</text>
+              </view>
             </view>
+            <input
+              v-model="codeInput"
+              class="codeinput"
+              type="number"
+              :maxlength="6"
+              :focus="codeFocus"
+              confirm-type="done"
+            />
           </view>
-          <!-- 真实输入藏在下方，点格子聚焦（小程序与 H5 通用做法） -->
-          <input
-            v-model="codeInput"
-            class="hiddeninput"
-            type="number"
-            :maxlength="6"
-            :focus="codeFocus"
-            @blur="codeFocus = false"
-          />
           <text v-if="codeInput.length === 6 && !codeValid" class="err">验证码不正确，请重新输入</text>
           <view class="resend" @click="sendCode"><text>重新发送</text></view>
           <text class="warn">演示环境：验证码通过弹窗直接给出，不会真的发短信</text>
@@ -497,7 +509,32 @@ function finish(): void {
 .cbox.filled { border-color: #1a1a1a; }
 .cbox.cur { border-color: #1a1a1a; box-shadow: 0 0 0 3px rgba(26,26,26,.08); }
 .cdigit { font-size: 26px; font-weight: 800; color: #111; letter-spacing: 0; }
-.hiddeninput { position: absolute; left: -9999px; width: 1px; height: 1px; opacity: 0; }
+.codewrap { position: relative; }
+/*
+ * uni-app 在 H5 会把 <input> 包成 <uni-input>，
+ * 样式加在外层包装上时，**内层真正的 input 没有尺寸 → 点了聚焦不到**，
+ * 于是验证码永远输不进去（自测实测：能提取到验证码但输入无效）。
+ * 必须用 :deep() 把内层 input 也铺满。
+ */
+.codeinput {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  /* 不能用 display:none / visibility:hidden —— 那样无法聚焦 */
+  background: transparent;
+}
+.codewrap :deep(input),
+.codewrap :deep(.uni-input-wrapper),
+.codewrap :deep(.uni-input-input) {
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  color: transparent;
+  caret-color: transparent;
+}
 .resend { margin-top: 14px; }
 .resend text { font-size: 12.5px; color: #4a7fa5; }
 .pk { flex: 1; min-width: 0; }
