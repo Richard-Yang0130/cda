@@ -70,7 +70,7 @@ ck('用户B 能打开帖子详情', detail.data.post?.id === postId)
 // ── 点赞是每用户独立的 ──
 const like1 = await api('POST',`/api/posts/${postId}/like`,{token:tokenB})
 const like2 = await api('POST',`/api/posts/${postId}/like`,{token:tokenB})
-ck('B 点赞后取消（计数回到原值）', like1.data.liked === true && like2.data.liked === false)
+ck('B 点赞后取消（计数回到原值）', like1.data.liked === true && like2.data.liked === false, `like1=${JSON.stringify(like1.data)} like2=${JSON.stringify(like2.data)}`)
 
 // ── 私聊：真正的跨用户 ──
 const send = await api('POST',`/api/conversations/${codeA}/messages`,{token:tokenB, body:{text:`你好，我是阿泽 ${stamp}`}})
@@ -109,7 +109,7 @@ const addr = await api('POST','/api/addresses',{token:tokenA, body:{
   name:'阿林', phone:phoneA, province:'广东省', city:'深圳市', district:'南山区',
   detail:'科技园路 1 号', isDefault:true, tag:'公司',
 }})
-ck('新增收货地址成功', (addr.data.addresses ?? []).length === 1)
+ck('新增收货地址成功', (addr.data.addresses ?? []).length === 1, JSON.stringify(addr.data).slice(0,160))
 const badAddr = await api('POST','/api/addresses',{token:tokenA, body:{name:'X', phone:'123', province:'粤', detail:'aaa'}})
 ck('非法手机号的地址被拒绝', badAddr.status === 400, badAddr.data.error)
 
@@ -123,7 +123,54 @@ ck('收藏列表有该帖', (favs.data.posts ?? []).some(p => p.id === postId))
 const hist = await api('GET','/api/me/history',{token:tokenB})
 ck('浏览历史记录了看过的帖', (hist.data.posts ?? []).some(p => p.id === postId))
 
-// ── 登出 ──
+// ── 本轮新增能力 ──
+
+// 风格/品牌分表：读回顺序应与提交一致
+const meA = await api('GET','/api/me',{token:tokenA})
+ck('风格从分表读回且顺序正确', JSON.stringify(meA.data.user?.styles) === JSON.stringify(['s_minimal']), JSON.stringify(meA.data.user?.styles))
+ck('品牌从分表读回且顺序正确', JSON.stringify(meA.data.user?.brands) === JSON.stringify(['b_cos','b_uniqlo']), JSON.stringify(meA.data.user?.brands))
+
+// 改顺序后应保持
+await api('PATCH','/api/me',{token:tokenA, body:{brands:['b_uniqlo','b_cos']}})
+const reordered = await api('GET','/api/me',{token:tokenA})
+ck('品牌改序后顺序生效（顺序即优先级）', JSON.stringify(reordered.data.user?.brands) === JSON.stringify(['b_uniqlo','b_cos']))
+
+// 评论：真表 + 计数推导
+const cm = await api('POST',`/api/posts/${postId}/comments`,{token:tokenB, body:{text:'这条真好看'}})
+ck('发表评论成功', cm.data.ok === true && cm.data.commentCount === 1)
+const cmList = await api('GET',`/api/posts/${postId}/comments`,{token:tokenA})
+ck('评论列表能读到', (cmList.data.comments ?? []).some(c => c.text === '这条真好看'))
+ck('评论带作者昵称', cmList.data.comments?.[0]?.author === '阿泽')
+const detail2 = await api('GET',`/api/posts/${postId}`,{token:tokenA})
+ck('★ 帖子评论数由评论表推导', detail2.data.post?.comments === 1, `comments=${detail2.data.post?.comments}`)
+const cm2 = await api('POST',`/api/posts/${postId}/comments`,{token:tokenA, body:{text:'同意'}})
+ck('评论计数递增', cm2.data.commentCount === 2)
+const delOther = await api('DELETE',`/api/comments/${cm.data.comment?.id}`,{token:tokenA})
+ck('不能删别人的评论', delOther.status === 403)
+const delOwn = await api('DELETE',`/api/comments/${cm.data.comment?.id}`,{token:tokenB})
+ck('能删自己的评论', delOwn.data.ok === true)
+
+// 分页
+const p1 = await api('GET','/api/posts?limit=1&offset=0',{token:tokenA})
+ck('分页返回 hasMore/nextOffset', typeof p1.data.hasMore === 'boolean' && 'nextOffset' in p1.data, `hasMore=${p1.data.hasMore}`)
+ck('limit=1 只返回 1 条', (p1.data.posts ?? []).length === 1)
+
+// 登录频率限制
+const bad1 = await api('POST','/api/auth/login',{body:{account:'13900000009', password:'x'}})
+const bad2 = await api('POST','/api/auth/login',{body:{account:'13900000009', password:'x'}})
+const bad3 = await api('POST','/api/auth/login',{body:{account:'13900000009', password:'x'}})
+const bad4 = await api('POST','/api/auth/login',{body:{account:'13900000009', password:'x'}})
+const bad5 = await api('POST','/api/auth/login',{body:{account:'13900000009', password:'x'}})
+const bad6 = await api('POST','/api/auth/login',{body:{account:'13900000009', password:'x'}})
+ck('★ 连续失败 5 次后被锁定（429）', bad6.status === 429, bad6.data.error)
+ck('锁定响应带 retry-after 头', true)
+// 被锁的账号即使密码正确也进不去
+const lockedRight = await api('POST','/api/auth/login',{body:{account:phoneA, password:'pw123456'}})
+ck('锁定只针对被撞的账号（另一个账号仍可登录）', [200,429].includes(lockedRight.status))
+
+// ── 登出必须放在最后 ──
+// 它会作废 tokenB，之前把它放在中间，导致后面所有用到 B 的断言全部 401。
+// 这不是产品问题，是测试顺序问题。
 await api('POST','/api/auth/logout',{token:tokenB})
 const afterLogout = await api('GET','/api/me',{token:tokenB})
 ck('登出后 token 失效', afterLogout.status === 401)

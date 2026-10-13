@@ -27,7 +27,7 @@ CDA_PORT=8787 CDA_DB=./data/cda.db CDA_INVITES="BETA-001,BETA-002" \
 ## 测试
 
 ```bash
-bash scripts/run-api-test.sh    # 32 项端到端断言，每次都从干净的库跑
+bash scripts/run-api-test.sh    # 47 项端到端断言，每次都从干净的库跑
 ```
 
 ## 接口
@@ -47,8 +47,30 @@ bash scripts/run-api-test.sh    # 32 项端到端断言，每次都从干净的�
 | POST | `/api/posts/:id/{like,favorite}` | 点赞 / 收藏（切换式） |
 | GET | `/api/conversations` | 会话列表（含对方资料、最后一条、未读数） |
 | GET/POST | `/api/conversations/:peer/messages` | 读历史（**读后自动标记已读**）/ 发消息 |
+| GET/POST | `/api/posts/:id/comments` | 评论（分页）/ 发评论 |
+| DELETE | `/api/comments/:id` | 删评论（**只能删自己的**） |
 | GET/POST/DELETE | `/api/addresses` | 收货地址 |
 | GET/POST/DELETE | `/api/wardrobe` | 衣橱 |
+
+列表类接口统一支持 `?limit=&offset=`，返回 `hasMore` 与 `nextOffset`
+（多取一条判断有无下一页，省掉额外的 COUNT 查询）。
+
+## 表结构（13 张，`PRAGMA user_version` 管理迁移）
+
+| 领域 | 表 |
+|---|---|
+| 账号 | `users` `sessions` `invites` `login_attempts` `user_styles` `user_brands` |
+| 社区 | `posts` `comments` `post_likes` `favorites` `history` |
+| 社交 | `follows` `blocks` `conversations` `messages` |
+| 交易 | `addresses` `wardrobe` |
+
+**改动结构只能往 `MIGRATIONS` 数组尾部追加**，绝不修改已发布的条目 ——
+否则老库与新库会走成两个不同的形状。每步迁移都在事务里，失败自动回滚。
+
+> 上一版把风格/品牌存成 JSON 字符串，**无法查询**；现在拆成
+> `user_styles` / `user_brands` 两张表（`sort_order` 保留用户排序，
+> 对应主页只展示前 5 个）。`posts.comments` 那个没人维护的计数器
+> 也改成了从 `comments` 真表推导。
 
 ## 已实现的安全要点
 
@@ -59,3 +81,6 @@ bash scripts/run-api-test.sh    # 32 项端到端断言，每次都从干净的�
 - 搜索与用户主页都遵守对方的隐私设置（不被搜索到 / 隐藏在线状态 / 隐藏地区）
 - 请求体限制 1MB，防超大请求打爆内存
 - 注册的格式校验放在**服务端**（前端校验可被绕过）
+- **登录频率限制**：按「账号」与「来源 IP」双维度计数，连续失败 5 次锁 10 分钟，
+  返回 429 + `retry-after`。同时挡住「撞一个账号」与「用一个 IP 撞很多账号」
+- 会话过期时间建了索引，便于定期清理

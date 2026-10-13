@@ -15,7 +15,9 @@ import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import {
   openDb, hashPassword, verifyPassword, formatUserCode, nextUserSeq,
-  nowIso, newId, newToken, type DB,
+  nowIso, newId, newToken,
+  checkAttempts, recordFailure, clearFailures,
+  type DB,
 } from './db.ts'
 
 const PORT = Number(process.env.CDA_PORT ?? 8787)
@@ -76,6 +78,60 @@ function route(method: string, pattern: string, auth: boolean, fn: Handler): voi
   routes.push({ method, pattern, re, keys, auth, fn })
 }
 
+// ── 风格 / 品牌：分表读写 ─────────────────────────────
+
+function stylesOf(code: string): string[] {
+  return (db.prepare('SELECT style_id FROM user_styles WHERE code = ? ORDER BY sort_order').all(code) as any[])
+    .map((r) => r.style_id)
+}
+function brandsOf(code: string): string[] {
+  return (db.prepare('SELECT brand_id FROM user_brands WHERE code = ? ORDER BY sort_order').all(code) as any[])
+    .map((r) => r.brand_id)
+}
+/** 全量替换：先删后插，顺序即 sort_order（主页取前 5 个靠它） */
+function setStyles(code: string, ids: string[]): void {
+  db.prepare('DELETE FROM user_styles WHERE code = ?').run(code)
+  const ins = db.prepare('INSERT OR IGNORE INTO user_styles (code, style_id, sort_order) VALUES (?,?,?)')
+  ids.forEach((id, i) => ins.run(code, String(id), i))
+}
+function setBrands(code: string, ids: string[]): void {
+  db.prepare('DELETE FROM user_brands WHERE code = ?').run(code)
+  const ins = db.prepare('INSERT OR IGNORE INTO user_brands (code, brand_id, sort_order) VALUES (?,?,?)')
+  ids.forEach((id, i) => ins.run(code, String(id), i))
+}
+
+// ── 分页 ──────────────────────────────────────────────
+// 原来所有列表都是硬编码 LIMIT，翻页要改接口。统一收口到这里。
+
+const MAX_LIMIT = 50
+function page(req: Req): { limit: number; offset: number } {
+  const limit = Math.min(MAX_LIMIT, Math.max(1, Number(req.query.get('limit')) || 20))
+  const offset = Math.max(0, Number(req.query.get('offset')) || 0)
+  return { limit, offset }
+}
+function paged<T>(res: ServerResponse, key: string, rows: T[], limit: number, offset: number): void {
+  json(res, 200, {
+    ok: true,
+    [key]: rows,
+    // 多取一条来判断还有没有下一页，避免额外的 COUNT 查询
+    hasMore: rows.length > limit,
+    nextOffset: rows.length > limit ? offset + limit : null,
+  })
+}
+
+// ── 在线状态：节流写入 ────────────────────────────────
+// 原来每个请求都 UPDATE 一次，写放大明显。60 秒内只写一次。
+
+const PRESENCE_THROTTLE_MS = 60_000
+const lastPresence = new Map<string, number>()
+function touchPresence(code: string, online = true): void {
+  const now = Date.now()
+  if (now - (lastPresence.get(code) ?? 0) < PRESENCE_THROTTLE_MS) return
+  lastPresence.set(code, now)
+  db.prepare('UPDATE users SET is_online = ?, last_seen_at = ? WHERE code = ?')
+    .run(online ? 1 : 0, nowIso(), code)
+}
+
 // ── 鉴权 ──────────────────────────────────────────────
 
 function currentUser(req: Req): any | null {
@@ -102,8 +158,8 @@ function toUser(u: any, opts: { self?: boolean } = {}): any {
     gender: u.gender,
     birthday: u.birthday,
     avatarHex: u.avatar_hex,
-    styles: JSON.parse(u.styles || '[]'),
-    brands: JSON.parse(u.brands || '[]'),
+    styles: stylesOf(u.code),
+    brands: brandsOf(u.code),
     status: u.status,
     region: privacy.hideRegion ? '' : u.region,
     privacy,
@@ -172,13 +228,15 @@ route('POST', '/api/auth/register', false, (req, res) => {
   const { hash, salt } = hashPassword(String(b.password))
   db.prepare(`INSERT INTO users
     (code, seq, phone, email, password_hash, password_salt, nickname, gender, birthday,
-     avatar_hex, styles, brands, region, privacy, last_seen_at, is_online, created_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+     avatar_hex, region, privacy, last_seen_at, is_online, created_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
     code, seq, b.phone ?? null, b.email ?? null, hash, salt,
     String(b.nickname), b.gender ?? 'female', b.birthday ?? '',
-    b.avatarHex ?? '#c9b8a8', JSON.stringify(b.styles ?? []), JSON.stringify(b.brands ?? []),
+    b.avatarHex ?? '#c9b8a8',
     b.region ?? '中国', JSON.stringify(b.privacy ?? {}), nowIso(), 1, nowIso(),
   )
+  setStyles(code, Array.isArray(b.styles) ? b.styles : [])
+  setBrands(code, Array.isArray(b.brands) ? b.brands : [])
   if (b.inviteCode) {
     db.prepare('UPDATE invites SET used_by = ?, used_at = ? WHERE code = ?').run(code, nowIso(), String(b.inviteCode))
   }
@@ -190,13 +248,27 @@ route('POST', '/api/auth/login', false, (req, res) => {
   const b = req.body
   const account = String(b.account ?? '').trim()
   if (!account || !b.password) return fail(res, 400, '请输入账号与密码')
+
+  // 频率限制：防撞库。按「账号 + 来源 IP」计数，任一维度都可能被换，
+  // 两个一起记能同时挡住「撞一个账号」和「用一个 IP 撞很多账号」。
+  const ip = String(req.headers['x-forwarded-for'] ?? req.socket.remoteAddress ?? '').split(',')[0]!.trim()
+  const keys = [`acct:${account}`, `ip:${ip}`]
+  for (const k of keys) {
+    const c = checkAttempts(db, k)
+    if (!c.allowed) {
+      res.setHeader('retry-after', String(c.retryAfterSec ?? 600))
+      return fail(res, 429, `尝试过于频繁，请 ${Math.ceil((c.retryAfterSec ?? 600) / 60)} 分钟后再试`)
+    }
+  }
   const u = db.prepare('SELECT * FROM users WHERE phone = ? OR email = ? OR code = ?')
     .get(account, account, account) as any
   // 账号不存在与密码错误返回同一句话，避免暴露账号是否注册过
   if (!u || !verifyPassword(String(b.password), u.password_hash, u.password_salt)) {
+    for (const k of keys) recordFailure(db, k)
     return fail(res, 401, '账号或密码不正确')
   }
   if (u.status === 'disabled') return fail(res, 403, '账号已被禁用')
+  for (const k of keys) clearFailures(db, k)
   db.prepare('UPDATE users SET is_online = 1, last_seen_at = ? WHERE code = ?').run(nowIso(), u.code)
   json(res, 200, { ok: true, token: issueToken(u.code), user: toUser(u, { self: true }) })
 })
@@ -205,6 +277,7 @@ route('POST', '/api/auth/logout', true, (req, res) => {
   const h = req.headers.authorization ?? ''
   const token = h.startsWith('Bearer ') ? h.slice(7) : ''
   db.prepare('DELETE FROM sessions WHERE token = ?').run(token)
+  lastPresence.delete(req.code!)
   db.prepare('UPDATE users SET is_online = 0, last_seen_at = ? WHERE code = ?').run(nowIso(), req.code!)
   json(res, 200, { ok: true })
 })
@@ -227,13 +300,14 @@ route('PATCH', '/api/me', true, (req, res) => {
   for (const [k, col] of Object.entries(map)) {
     if (b[k] !== undefined) { sets.push(`${col} = ?`); vals.push(b[k]) }
   }
-  for (const k of ['styles', 'brands', 'privacy']) {
-    if (b[k] !== undefined) { sets.push(`${k} = ?`); vals.push(JSON.stringify(b[k])) }
-  }
+  if (b.privacy !== undefined) { sets.push('privacy = ?'); vals.push(JSON.stringify(b.privacy)) }
   if (sets.length) {
     vals.push(req.code!)
     db.prepare(`UPDATE users SET ${sets.join(', ')} WHERE code = ?`).run(...(vals as any[]))
   }
+  // 风格与品牌走分表，顺序即优先级
+  if (Array.isArray(b.styles)) setStyles(req.code!, b.styles)
+  if (Array.isArray(b.brands)) setBrands(req.code!, b.brands)
   const u = db.prepare('SELECT * FROM users WHERE code = ?').get(req.code!)
   json(res, 200, { ok: true, user: toUser(u, { self: true }) })
 })
@@ -244,12 +318,13 @@ route('GET', '/api/users', true, (req, res) => {
   const q = (req.query.get('q') ?? '').trim()
   if (!q) return json(res, 200, { ok: true, users: [] })
   const like = `%${q}%`
+  const { limit, offset } = page(req)
   const rows = db.prepare(
-    'SELECT * FROM users WHERE (nickname LIKE ? OR code LIKE ?) AND code != ? LIMIT 30',
-  ).all(like, like, req.code!) as any[]
+    'SELECT * FROM users WHERE (nickname LIKE ? OR code LIKE ?) AND code != ? LIMIT ? OFFSET ?',
+  ).all(like, like, req.code!, limit + 1, offset) as any[]
   // 尊重对方的「不被搜索到」隐私设置
   const users = rows.filter((u) => !JSON.parse(u.privacy || '{}').hideFromSearch).map((u) => toUser(u))
-  json(res, 200, { ok: true, users })
+  paged(res, 'users', users, limit, offset)
 })
 
 route('GET', '/api/users/:code', true, (req, res) => {
@@ -330,7 +405,7 @@ function toPost(p: any, likedByMe = false): any {
     coverHex: p.cover_hex,
     tags: JSON.parse(p.tags || '[]'),
     likes: p.likes,
-    comments: p.comments,
+    comments: p.comment_count ?? 0,
     ratio: p.ratio,
     linkedProductId: p.linked_product_id ?? undefined,
     createdAt: p.created_at,
@@ -339,19 +414,66 @@ function toPost(p: any, likedByMe = false): any {
 }
 
 route('GET', '/api/posts', true, (req, res) => {
+  const { limit, offset } = page(req)
+  // 评论数由评论表推导，不再依赖 posts 上那个没人维护的计数器
   const rows = db.prepare(`
-    SELECT p.*, u.nickname AS author_nickname, u.avatar_hex AS author_avatar
+    SELECT p.*, u.nickname AS author_nickname, u.avatar_hex AS author_avatar,
+           (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.id) AS comment_count
     FROM posts p JOIN users u ON u.code = p.author_code
-    ORDER BY p.created_at DESC LIMIT 60`).all() as any[]
+    ORDER BY p.created_at DESC LIMIT ? OFFSET ?`).all(limit + 1, offset) as any[]
   const liked = new Set(
     (db.prepare('SELECT post_id FROM post_likes WHERE code = ?').all(req.code!) as any[]).map((r) => r.post_id),
   )
-  json(res, 200, { ok: true, posts: rows.map((p) => toPost(p, liked.has(p.id))) })
+  paged(res, 'posts', rows.map((p) => toPost(p, liked.has(p.id))), limit, offset)
+})
+
+// ── 评论 ──
+
+route('GET', '/api/posts/:id/comments', true, (req, res) => {
+  const { limit, offset } = page(req)
+  const rows = db.prepare(`
+    SELECT c.*, u.nickname AS author_nickname, u.avatar_hex AS author_avatar
+    FROM comments c JOIN users u ON u.code = c.author_code
+    WHERE c.post_id = ? ORDER BY c.created_at DESC LIMIT ? OFFSET ?`)
+    .all(req.params.id!, limit + 1, offset) as any[]
+  paged(res, 'comments', rows.map((c) => ({
+    id: c.id, postId: c.post_id, text: c.text,
+    authorCode: c.author_code, author: c.author_nickname, avatarHex: c.author_avatar,
+    createdAt: c.created_at,
+  })), limit, offset)
+})
+
+route('POST', '/api/posts/:id/comments', true, (req, res) => {
+  const text = String(req.body?.text ?? '').trim()
+  if (!text) return fail(res, 400, '评论不能为空')
+  if (text.length > 500) return fail(res, 400, '评论过长')
+  if (!db.prepare('SELECT 1 FROM posts WHERE id = ?').get(req.params.id!)) {
+    return fail(res, 404, '帖子不存在')
+  }
+  const id = newId('cm')
+  db.prepare('INSERT INTO comments (id, post_id, author_code, text, created_at) VALUES (?,?,?,?,?)')
+    .run(id, req.params.id!, req.code!, text, nowIso())
+  const u = db.prepare('SELECT nickname, avatar_hex FROM users WHERE code = ?').get(req.code!) as any
+  const n = (db.prepare('SELECT COUNT(*) AS n FROM comments WHERE post_id = ?').get(req.params.id!) as any).n
+  json(res, 200, {
+    ok: true, commentCount: n,
+    comment: { id, postId: req.params.id!, text, authorCode: req.code!, author: u.nickname, avatarHex: u.avatar_hex, createdAt: nowIso() },
+  })
+})
+
+route('DELETE', '/api/comments/:id', true, (req, res) => {
+  const c = db.prepare('SELECT * FROM comments WHERE id = ?').get(req.params.id!) as any
+  if (!c) return fail(res, 404, '评论不存在')
+  // 只有作者本人能删自己的评论
+  if (c.author_code !== req.code!) return fail(res, 403, '只能删除自己的评论')
+  db.prepare('DELETE FROM comments WHERE id = ?').run(req.params.id!)
+  json(res, 200, { ok: true })
 })
 
 route('GET', '/api/posts/:id', true, (req, res) => {
   const p = db.prepare(`
-    SELECT p.*, u.nickname AS author_nickname, u.avatar_hex AS author_avatar
+    SELECT p.*, u.nickname AS author_nickname, u.avatar_hex AS author_avatar,
+           (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.id) AS comment_count
     FROM posts p JOIN users u ON u.code = p.author_code WHERE p.id = ?`).get(req.params.id!) as any
   if (!p) return fail(res, 404, '帖子不存在')
   // 记录浏览历史
@@ -383,7 +505,7 @@ route('POST', '/api/posts/:id/like', true, (req, res) => {
     db.prepare('DELETE FROM post_likes WHERE post_id = ? AND code = ?').run(id, req.code!)
     db.prepare('UPDATE posts SET likes = MAX(0, likes - 1) WHERE id = ?').run(id)
   } else {
-    db.prepare('INSERT INTO post_likes (post_id, code) VALUES (?,?)').run(id, req.code!)
+    db.prepare('INSERT INTO post_likes (post_id, code, created_at) VALUES (?,?,?)').run(id, req.code!, nowIso())
     db.prepare('UPDATE posts SET likes = likes + 1 WHERE id = ?').run(id)
   }
   const after = db.prepare('SELECT likes FROM posts WHERE id = ?').get(id) as any
@@ -437,8 +559,10 @@ route('GET', '/api/conversations/:peer/messages', true, (req, res) => {
   const me = req.code!
   const peer = req.params.peer!
   const convId = convOf(me, peer)
-  const rows = db.prepare('SELECT * FROM messages WHERE conv_id = ? ORDER BY created_at ASC LIMIT 200')
-    .all(convId) as any[]
+  // 历史消息按时间正序分页；前端默认拉最新的一页
+  const { limit, offset } = page(req)
+  const rows = db.prepare('SELECT * FROM messages WHERE conv_id = ? ORDER BY created_at ASC LIMIT ? OFFSET ?')
+    .all(convId, limit, offset) as any[]
   // 读过的标记为已读
   db.prepare('UPDATE messages SET read_at = ? WHERE conv_id = ? AND from_code != ? AND read_at IS NULL')
     .run(nowIso(), convId, me)
@@ -493,10 +617,11 @@ route('POST', '/api/addresses', true, (req, res) => {
     ? b.id : newId('addr')
   if (b.isDefault) db.prepare('UPDATE addresses SET is_default = 0 WHERE code = ?').run(req.code!)
   db.prepare(`INSERT OR REPLACE INTO addresses
-    (id, code, name, phone, province, city, district, detail, is_default, tag)
-    VALUES (?,?,?,?,?,?,?,?,?,?)`).run(
+    (id, code, name, phone, province, city, district, detail, is_default, tag, created_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(
     id, req.code!, String(b.name), String(b.phone), String(b.province),
-    String(b.city ?? ''), String(b.district ?? ''), String(b.detail), b.isDefault ? 1 : 0, String(b.tag ?? ''),
+    String(b.city ?? ''), String(b.district ?? ''), String(b.detail),
+    b.isDefault ? 1 : 0, String(b.tag ?? ''), nowIso(),
   )
   const rows = db.prepare('SELECT * FROM addresses WHERE code = ? ORDER BY is_default DESC, rowid DESC').all(req.code!) as any[]
   json(res, 200, { ok: true, addresses: rows.map(toAddress) })
@@ -570,7 +695,7 @@ const server = createServer(async (rawReq, res) => {
     const u = currentUser(req)
     if (!u) return fail(res, 401, '未登录或登录已过期')
     req.code = u.code
-    db.prepare('UPDATE users SET is_online = 1, last_seen_at = ? WHERE code = ?').run(nowIso(), u.code)
+    touchPresence(u.code)
   }
 
   try {
