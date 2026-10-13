@@ -9,7 +9,8 @@
 import { reactive } from 'vue'
 import {
   createBodyState, deriveProfile, defaultBodyProfile, mockWardrobe,
-  type BodyState, type Gender, type WardrobeItem,
+  formatUserCode, DEFAULT_PRIVACY,
+  type BodyState, type Gender, type UserProfile, type WardrobeItem,
 } from '@cda/core'
 
 let seq = 0
@@ -29,6 +30,12 @@ export const store = reactive({
   bodyState: createBodyState('female') as BodyState,
   /** 是否已完成过首次创建（决定「我的人偶」显示"创建"还是"修改"） */
   personaCreated: false,
+
+  /**
+   * 当前登录用户。null = 未注册/未登录。
+   * 注册流程走完第 6 步后写入，并落盘。
+   */
+  user: null as UserProfile | null,
   /**
    * 从「穿搭建议」页点「在 3D 人偶上试穿」时写入，
    * 3D 试穿台 onShow 时读取并清空 —— 这是 uni-app 下最省事的跨页传参方式。
@@ -90,6 +97,54 @@ export function removeWardrobeItem(id: string): void {
 /** 同一件商品是否已在衣橱里（避免重复添加） */
 export function hasProduct(productId: string): boolean {
   return store.wardrobe.some((w) => w.productId === productId)
+}
+
+const USER_KEY = 'cda.user.v1'
+
+/** 注册完成：写入用户并落盘 */
+export function commitUser(u: UserProfile): void {
+  store.user = u
+  try {
+    uni.setStorageSync(USER_KEY, JSON.stringify(u))
+  } catch {
+    // 存储不可用时静默降级
+  }
+}
+
+export function restoreUser(): void {
+  try {
+    const raw = uni.getStorageSync(USER_KEY)
+    if (!raw) return
+    const u = JSON.parse(raw as string) as UserProfile
+    if (u && u.code && u.nickname) {
+      store.user = { ...u, privacy: { ...DEFAULT_PRIVACY, ...u.privacy } }
+    }
+  } catch {
+    // 解析失败当作未登录
+  }
+}
+
+export function logout(): void {
+  store.user = null
+  try {
+    uni.removeStorageSync(USER_KEY)
+  } catch {
+    /* 忽略 */
+  }
+}
+
+/** 获取下一个用户码（demo 用；真实实现必须由后端发号） */
+export function nextUserCode(): string {
+  let seq = 1
+  try {
+    const raw = uni.getStorageSync('cda.userSeq')
+    seq = (raw ? parseInt(String(raw), 10) : 0) + 1
+    if (!Number.isFinite(seq) || seq < 1) seq = 1
+    uni.setStorageSync('cda.userSeq', String(seq))
+  } catch {
+    seq = Math.floor(Math.random() * 9999) + 1
+  }
+  return formatUserCode(seq)
 }
 
 /** 当前身型对应的性别（供按性别取网格用） */

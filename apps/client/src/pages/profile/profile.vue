@@ -2,11 +2,19 @@
   <NavShell current="/pages/profile/profile">
   <view class="page">
     <view class="hero">
-      <view class="avatar"><text>搭</text></view>
-      <view class="who">
-        <text class="name">我的空间</text>
-        <text class="meta">{{ genderLabel }} · {{ heightLabel }} · {{ store.wardrobe.length }} 件单品</text>
+      <!-- 已注册则展示真实用户（头像/昵称/用户码/在线状态），未注册回落到默认 -->
+      <view class="avatar" :style="store.user ? { background: store.user.avatarHex } : {}">
+        <text v-if="!store.user">搭</text>
       </view>
+      <view class="who">
+        <view class="nameline">
+          <text class="name">{{ store.user?.nickname ?? '我的空间' }}</text>
+          <text v-if="presence" class="online">{{ presence }}</text>
+        </view>
+        <text v-if="store.user" class="code">{{ store.user.code }}</text>
+        <text class="meta">{{ genderLabel }} · {{ heightLabel }} · {{ store.wardrobe.length }} 件单品 · {{ regionLabel }}</text>
+      </view>
+      <view v-if="!store.user" class="reg" @click="goRegister"><text>注册</text></view>
     </view>
 
     <view class="card" @click="openPersona">
@@ -31,6 +39,20 @@
         <text class="tt">{{ it.label }}</text>
         <text class="ts">{{ it.sub }}</text>
       </view>
+    </view>
+
+    <!-- 我的收藏 / 关注 / 浏览历史（P0-2） -->
+    <view class="mine">
+      <view v-for="m in mine" :key="m.key" class="mtile" @click="openMine(m.key)">
+        <text class="mv">{{ m.value }}</text>
+        <text class="ml">{{ m.label }}</text>
+      </view>
+    </view>
+
+    <view class="settings-entry" @click="goSettings">
+      <text class="set-t">设置</text>
+      <text class="set-s">隐私 · 账号 · 通知 · 关于</text>
+      <text class="arrow">›</text>
     </view>
 
     <!-- ───── 我的空间：闲鱼式个人主页 ───── -->
@@ -101,12 +123,34 @@
 <script setup lang="ts">
 import NavShell from '@/components/NavShell.vue'
 import { computed, ref } from 'vue'
-import { deriveProfile, findProduct, formatPrice, mockPosts, type Post } from '@cda/core'
+import { deriveProfile, findProduct, formatPrice, mockPosts, presenceText, type Post } from '@cda/core'
 import { store, restoreBodyState } from '@/store/app-store'
 
 const p = computed(() => deriveProfile(store.bodyState))
+/** 在线状态与地区：受用户隐私设置控制（P0-2） */
+const presence = computed(() => (store.user ? presenceText(store.user) : ''))
+const regionLabel = computed(() =>
+  !store.user || store.user.privacy.hideRegion ? '未公开' : store.user.region,
+)
+function goRegister(): void {
+  uni.navigateTo({ url: '/pages/register/register' })
+}
 const genderLabel = computed(() => (store.bodyState.gender === 'male' ? '男性' : '女性'))
 const heightLabel = computed(() => `${store.bodyState.heightCm}cm`)
+
+const mine = computed(() => [
+  { key: 'fav', label: '我的收藏', value: store.wardrobe.length },
+  { key: 'follow', label: '我的关注', value: 3 },
+  { key: 'history', label: '浏览历史', value: 12 },
+])
+
+function openMine(key: string): void {
+  uni.showToast({ title: `${key === 'fav' ? '收藏' : key === 'follow' ? '关注' : '浏览历史'}（演示数据）`, icon: 'none' })
+}
+
+function goSettings(): void {
+  uni.navigateTo({ url: '/pages/settings/settings' })
+}
 
 const items = [
   { label: '我的衣橱', sub: '已购单品', url: '/pages/wardrobe/wardrobe' },
@@ -217,9 +261,37 @@ restoreBodyState()
   flex-direction: column;
   gap: 3px;
 }
+.nameline {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
 .name {
   font-size: 18px;
   font-weight: 700;
+}
+.online {
+  font-size: 10px;
+  color: #4a9d4a;
+  background: #eef7ee;
+  padding: 2px 7px;
+  border-radius: 8px;
+}
+.code {
+  font-size: 11px;
+  color: #8a8a8a;
+  letter-spacing: 1px;
+  margin-top: 1px;
+}
+.reg {
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: #1a1a1a;
+  flex-shrink: 0;
+}
+.reg text {
+  color: #fff;
+  font-size: 12px;
 }
 .meta {
   font-size: 11.5px;
@@ -384,6 +456,37 @@ restoreBodyState()
   font-size: 13px;
   color: #666;
 }
+.mine {
+  display: flex;
+  gap: 10px;
+  margin-top: 16px;
+}
+.mtile {
+  flex: 1;
+  background: #fff;
+  border-radius: 12px;
+  padding: 13px 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  box-shadow: 0 1px 7px rgba(0,0,0,.04);
+}
+.mv { font-size: 17px; font-weight: 700; }
+.ml { font-size: 10.5px; color: #a0a0a0; }
+.settings-entry {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+  background: #fff;
+  border-radius: 12px;
+  padding: 14px;
+  box-shadow: 0 1px 7px rgba(0,0,0,.04);
+}
+.set-t { font-size: 14px; font-weight: 600; }
+.set-s { flex: 1; font-size: 10.5px; color: #a8a8a8; }
+.arrow { font-size: 18px; color: #c8c8c8; }
 .tile {
   width: calc(50% - 5px);
   background: #fff;

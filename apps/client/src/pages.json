@@ -9,6 +9,18 @@
       "style": { "navigationStyle": "custom", "navigationBarTitleText": "3D 试穿" }
     },
     {
+      "path": "pages/register/register",
+      "style": { "navigationStyle": "custom" }
+    },
+    {
+      "path": "pages/messages/messages",
+      "style": { "navigationStyle": "custom" }
+    },
+    {
+      "path": "pages/settings/settings",
+      "style": { "navigationBarTitleText": "设置" }
+    },
+    {
       "path": "pages/pay/pay",
       "style": { "navigationBarTitleText": "确认支付" }
     },

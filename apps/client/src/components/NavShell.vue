@@ -56,7 +56,7 @@ const current = ref(props.current ?? '')
  */
 const items = [
   { label: '首页 · 发现', short: '首页', url: '/pages/home/home' },
-  { label: '3D 试穿', short: '试穿', url: '/pages/index/index' },
+  { label: '消息', short: '消息', url: '/pages/messages/messages' },
   { label: '发布', short: '＋', url: '/pages/publish/publish', plus: true },
   { label: '我的衣橱', short: '衣橱', url: '/pages/wardrobe/wardrobe' },
   { label: '个人主页', short: '我的', url: '/pages/profile/profile' },
