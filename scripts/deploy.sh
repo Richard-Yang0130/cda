@@ -70,12 +70,12 @@ REMOTE
   say "上传后端与前端产物"
   # 后端源码：只传需要的文件
   rsync -az --delete -e "ssh ${SSH_OPTS[*]}" \
-    "$ROOT/apps/server/src/" ""$SSH_USER@$ip":$REMOTE_DIR/app/src/"
+    "$ROOT/apps/server/src/" "$SSH_USER@$ip:$REMOTE_DIR/app/src/"
   rsync -az -e "ssh ${SSH_OPTS[*]}" \
-    "$ROOT/apps/server/package.json" ""$SSH_USER@$ip":$REMOTE_DIR/app/package.json"
+    "$ROOT/apps/server/package.json" "$SSH_USER@$ip:$REMOTE_DIR/app/package.json"
   # 前端产物
   rsync -az --delete -e "ssh ${SSH_OPTS[*]}" \
-    "$ROOT/apps/client/dist/build/h5/" ""$SSH_USER@$ip":$REMOTE_DIR/web/"
+    "$ROOT/apps/client/dist/build/h5/" "$SSH_USER@$ip:$REMOTE_DIR/web/"
   ok "文件已上传"
 
   say "写入 systemd 服务与 Nginx 配置"
@@ -167,8 +167,10 @@ do_update() {
   need_ssh "$ip"
   prepare
   say "上传更新"
-  rsync -az --delete -e ssh "$ROOT/apps/server/src/" ""$SSH_USER@$ip":$REMOTE_DIR/app/src/"
-  rsync -az --delete -e ssh "$ROOT/apps/client/dist/build/h5/" ""$SSH_USER@$ip":$REMOTE_DIR/web/"
+  rsync -az --delete -e "ssh ${SSH_OPTS[*]}" \
+    "$ROOT/apps/server/src/" "$SSH_USER@$ip:$REMOTE_DIR/app/src/"
+  rsync -az --delete -e "ssh ${SSH_OPTS[*]}" \
+    "$ROOT/apps/client/dist/build/h5/" "$SSH_USER@$ip:$REMOTE_DIR/web/"
   ssh "${SSH_OPTS[@]}" "$SSH_USER@$ip" "sudo systemctl restart $SERVICE && sleep 2 && systemctl is-active $SERVICE"
   ok "已更新并重启（数据库未动）"
 }

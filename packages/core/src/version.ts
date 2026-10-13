@@ -9,7 +9,7 @@
  *   - 跳版本升级时，把中间所有版本的说明一起展示
  */
 
-export const APP_VERSION = '1.0.0-beta'
+export const APP_VERSION = '1.0.0'
 export const APP_NAME = '搭 · CDA'
 
 export interface ReleaseNote {
@@ -30,9 +30,23 @@ export interface ReleaseNote {
  */
 export const RELEASE_NOTES: ReleaseNote[] = [
   {
+    version: '1.0.0',
+    date: '2026-10-13',
+    major: true,
+    highlights: [
+      '正式版发布 · 已部署到 everydaywearing.com',
+      '账号数据改为云端存储：换个设备登录，内容都还在',
+      '合伙人之间可以互相看到帖子、评论、点赞',
+      '私聊真正打通：消息实时送达对方，不再是单机演示',
+      '首页信息流、帖子详情、评论、发布全部接入云端',
+      '我的收藏 / 关注 / 浏览历史：真实数据，可点进去看',
+      '收货地址：新增、编辑、删除、设为默认',
+      '安全性：密码加密存储、登录失败锁定、隐私设置生效',
+    ],
+  },
+  {
     version: '1.0.0-beta',
     date: '2025-01-01',
-    major: true,
     highlights: [
       '首个内测版本，面向合伙人开放',
       '6 步注册：登录方式、资料、身型、风格、品牌、头像',
