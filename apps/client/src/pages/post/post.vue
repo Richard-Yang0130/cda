@@ -24,8 +24,9 @@
               <text class="ptitle">{{ product.title }}</text>
               <text class="pprice">¥{{ formatPrice(product.priceCents) }}</text>
             </view>
-            <view class="pgo" @click="tryOn">
-              <text>试穿</text>
+            <view class="pbtns">
+              <view class="pgo ghost" @click="tryOn"><text>试穿</text></view>
+              <view class="pgo" @click="buy"><text>购买</text></view>
             </view>
           </view>
 
@@ -83,6 +84,13 @@ function collect(): void {
     note: '来自帖子',
   })
   uni.showToast({ title: '已加入衣橱', icon: 'none' })
+}
+
+/** 购买：进入确认支付页（当前为演示，未接入真实支付） */
+function buy(): void {
+  const p = product.value
+  if (!p) return
+  uni.navigateTo({ url: `/pages/pay/pay?productId=${p.id}` })
 }
 
 /** 试穿：写入待试穿单品后跳到 3D 试穿台 */
@@ -170,6 +178,19 @@ function tryOn(): void {
 .pprice {
   font-size: 13px;
   font-weight: 600;
+}
+.pbtns {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.pgo.ghost {
+  background: #ffffff;
+  border: 1px solid #dddddd;
+}
+.pgo.ghost text {
+  color: #333;
 }
 .pgo {
   height: 34px;

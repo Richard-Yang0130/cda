@@ -32,14 +32,76 @@
         <text class="ts">{{ it.sub }}</text>
       </view>
     </view>
+
+    <!-- ───── 我的空间：闲鱼式个人主页 ───── -->
+    <view class="space">
+      <view class="stats">
+        <view v-for="st in stats" :key="st.label" class="stat">
+          <text class="sv">{{ st.value }}</text>
+          <text class="sl">{{ st.label }}</text>
+        </view>
+      </view>
+
+      <view class="tabs">
+        <view
+          v-for="t in tabs"
+          :key="t.id"
+          class="tab"
+          :class="{ on: tab === t.id }"
+          @click="tab = t.id"
+        >
+          <text>{{ t.name }}</text>
+        </view>
+      </view>
+
+      <!-- 动态：我发布的帖子 -->
+      <view v-if="tab === 'posts'" class="plist">
+        <view v-for="po in myPosts" :key="po.id" class="pitem" @click="openPost(po.id)">
+          <view class="pthumb" :style="{ background: po.coverHex }" />
+          <view class="pbody">
+            <text class="pt">{{ po.title }}</text>
+            <text class="pm">♡ {{ po.likes }} · 💬 {{ po.comments }} · {{ po.tags[0] }}</text>
+          </view>
+        </view>
+      </view>
+
+      <!-- 闲置：我挂出的（买卖核心） -->
+      <view v-else-if="tab === 'sell'" class="plist">
+        <view v-for="po in myPosts" :key="po.id" class="pitem">
+          <view class="pthumb" :style="{ background: po.coverHex }" />
+          <view class="pbody">
+            <text class="pt">{{ linkedTitle(po) }}</text>
+            <text class="pm">¥{{ linkedPrice(po) }} · 在售</text>
+          </view>
+          <view class="mini" @click="delist(po.id)"><text>下架</text></view>
+        </view>
+        <view v-if="!myPosts.length" class="none"><text>还没有挂出闲置</text></view>
+      </view>
+
+      <!-- 买到：交易记录 -->
+      <view v-else class="plist">
+        <view v-for="o in orders" :key="o.id" class="pitem">
+          <view class="pthumb" :style="{ background: o.hex }" />
+          <view class="pbody">
+            <text class="pt">{{ o.title }}</text>
+            <text class="pm">¥{{ o.price }} · {{ o.status }}</text>
+          </view>
+        </view>
+        <view v-if="!orders.length" class="none"><text>还没有购买记录</text></view>
+      </view>
+
+      <view class="sell-cta" @click="goPublish">
+        <text>＋ 发布闲置 / 动态</text>
+      </view>
+    </view>
   </view>
   </NavShell>
 </template>
 
 <script setup lang="ts">
 import NavShell from '@/components/NavShell.vue'
-import { computed } from 'vue'
-import { deriveProfile } from '@cda/core'
+import { computed, ref } from 'vue'
+import { deriveProfile, findProduct, formatPrice, mockPosts, type Post } from '@cda/core'
 import { store, restoreBodyState } from '@/store/app-store'
 
 const p = computed(() => deriveProfile(store.bodyState))
@@ -59,6 +121,66 @@ function nav(url: string): void {
 
 function openPersona(): void {
   uni.navigateTo({ url: '/pages/persona/persona' })
+}
+
+/*
+ * ── 我的空间（闲鱼式个人主页）──
+ *
+ * 买卖功能的核心是「我挂出的闲置」与「我买到的」，两者现在都基于
+ * store 里的本地数据。真实接入时需要后端与订单表；
+ * 但**交互与数据结构先立住**，接后端时只换数据源。
+ */
+const tab = ref<'posts' | 'sell' | 'bought'>('posts')
+const tabs = [
+  { id: 'posts' as const, name: '动态' },
+  { id: 'sell' as const, name: '闲置' },
+  { id: 'bought' as const, name: '买到' },
+]
+const delisted = ref<string[]>([])
+
+/** 演示：把前三条当作「我发布的」 */
+const myPosts = computed(() => mockPosts.slice(0, 3).filter((p) => !delisted.value.includes(p.id)))
+
+const orders = computed(() =>
+  store.wardrobe.slice(0, 3).map((w) => {
+    const p = findProduct(w.productId)
+    return {
+      id: w.id,
+      title: p?.title ?? w.productId,
+      price: p ? formatPrice(p.priceCents) : '—',
+      hex: p?.colors[0]?.hex ?? '#dddddd',
+      status: '已下单（演示）',
+    }
+  }),
+)
+
+const stats = computed(() => [
+  { label: '动态', value: myPosts.value.length },
+  { label: '在售', value: myPosts.value.length },
+  { label: '衣橱', value: store.wardrobe.length },
+])
+
+function linkedTitle(po: Post): string {
+  const p = po.linkedProductId ? findProduct(po.linkedProductId) : undefined
+  return p?.title ?? po.title
+}
+
+function linkedPrice(po: Post): string {
+  const p = po.linkedProductId ? findProduct(po.linkedProductId) : undefined
+  return p ? formatPrice(p.priceCents) : '—'
+}
+
+function delist(id: string): void {
+  delisted.value = [...delisted.value, id]
+  uni.showToast({ title: '已下架（演示）', icon: 'none' })
+}
+
+function openPost(id: string): void {
+  uni.navigateTo({ url: `/pages/post/post?id=${id}` })
+}
+
+function goPublish(): void {
+  uni.navigateTo({ url: '/pages/publish/publish' })
 }
 
 restoreBodyState()
@@ -146,6 +268,121 @@ restoreBodyState()
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
+}
+.space {
+  margin-top: 20px;
+}
+.stats {
+  display: flex;
+  background: #fff;
+  border-radius: 14px;
+  padding: 14px 0;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.04);
+}
+.stat {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+}
+.sv {
+  font-size: 17px;
+  font-weight: 700;
+}
+.sl {
+  font-size: 10.5px;
+  color: #a0a0a0;
+}
+.tabs {
+  display: flex;
+  gap: 8px;
+  margin: 16px 0 10px;
+}
+.tab {
+  flex: 1;
+  height: 34px;
+  border-radius: 10px;
+  background: #f2f2f2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.tab text {
+  font-size: 12.5px;
+  color: #666;
+}
+.tab.on {
+  background: #1a1a1a;
+}
+.tab.on text {
+  color: #fff;
+  font-weight: 600;
+}
+.plist {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.pitem {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  background: #fff;
+  border-radius: 12px;
+  padding: 10px;
+  box-shadow: 0 1px 7px rgba(0, 0, 0, 0.04);
+}
+.pthumb {
+  width: 52px;
+  height: 52px;
+  border-radius: 9px;
+  flex-shrink: 0;
+}
+.pbody {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.pt {
+  font-size: 12.5px;
+  color: #222;
+  line-height: 17px;
+}
+.pm {
+  font-size: 10.5px;
+  color: #a0a0a0;
+}
+.mini {
+  padding: 5px 11px;
+  border-radius: 8px;
+  background: #f2f2f2;
+  flex-shrink: 0;
+}
+.mini text {
+  font-size: 11px;
+  color: #666;
+}
+.none {
+  padding: 26px 0;
+  text-align: center;
+  color: #b8b8b8;
+  font-size: 12px;
+}
+.sell-cta {
+  margin-top: 14px;
+  height: 42px;
+  border-radius: 12px;
+  border: 1px dashed #cfcfcf;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.sell-cta text {
+  font-size: 13px;
+  color: #666;
 }
 .tile {
   width: calc(50% - 5px);
