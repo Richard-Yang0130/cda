@@ -129,7 +129,9 @@
 import NavShell from '@/components/NavShell.vue'
 import { computed, ref } from 'vue'
 import { deriveProfile, findProduct, formatPrice, mockPosts, presenceText, type Post } from '@cda/core'
+import { onShow } from '@dcloudio/uni-app'
 import { store, restoreBodyState } from '@/store/app-store'
+import { api, errText } from '@/api/client'
 
 const p = computed(() => deriveProfile(store.bodyState))
 /** 在线状态与地区：受用户隐私设置控制（P0-2） */
@@ -143,15 +145,66 @@ function goRegister(): void {
 const genderLabel = computed(() => (store.bodyState.gender === 'male' ? '男性' : '女性'))
 const heightLabel = computed(() => `${store.bodyState.heightCm}cm`)
 
+/**
+ * 我的收藏 / 关注 / 浏览历史 —— 计数从后端拉。
+ * 这三个数此前是写死的假数字（0/3/12），点进去也没有内容。
+ */
+const favCount = ref(0)
+const followCount = ref(0)
+const historyCount = ref(0)
+
 const mine = computed(() => [
-  { key: 'fav', label: '我的收藏', value: store.wardrobe.length },
-  { key: 'follow', label: '我的关注', value: 3 },
-  { key: 'history', label: '浏览历史', value: 12 },
+  { key: 'fav', label: '我的收藏', value: favCount.value },
+  { key: 'follow', label: '我的关注', value: followCount.value },
+  { key: 'history', label: '浏览历史', value: historyCount.value },
 ])
 
-function openMine(key: string): void {
-  uni.showToast({ title: `${key === 'fav' ? '收藏' : key === 'follow' ? '关注' : '浏览历史'}（演示数据）`, icon: 'none' })
+async function loadMine(): Promise<void> {
+  try {
+    const [f, g, h] = await Promise.all([api.myFavorites(), api.myFollowing(), api.myHistory()])
+    favCount.value = (f.posts ?? []).length
+    followCount.value = (g.users ?? []).length
+    historyCount.value = (h.posts ?? []).length
+  } catch {
+    // 未登录或网络失败时保持 0，不打扰用户
+  }
 }
+
+/** 点进去先拉真实列表，有内容就展示，没有就给明确提示 */
+async function openMine(key: string): Promise<void> {
+  try {
+    if (key === 'fav') {
+      const r = await api.myFavorites()
+      if (r.posts?.length) {
+        uni.navigateTo({ url: `/pages/post/post?id=${r.posts[0].id}` })
+        return
+      }
+    } else if (key === 'follow') {
+      const r = await api.myFollowing()
+      if (r.users?.length) {
+        uni.showActionSheet({
+          itemList: r.users.slice(0, 6).map((u: any) => u.nickname),
+          success: (x) => uni.navigateTo({ url: `/pages/user/user?code=${r.users[x.tapIndex].code}` }),
+        })
+        return
+      }
+    } else {
+      const r = await api.myHistory()
+      if (r.posts?.length) {
+        uni.navigateTo({ url: `/pages/post/post?id=${r.posts[0].id}` })
+        return
+      }
+    }
+  } catch (e) {
+    uni.showToast({ title: errText(e), icon: 'none' })
+    return
+  }
+  uni.showToast({ title: key === 'fav' ? '还没有收藏' : key === 'follow' ? '还没有关注的人' : '还没有浏览记录', icon: 'none' })
+}
+
+onShow(() => {
+  void loadMine()
+})
 
 function goAddress(): void {
   uni.navigateTo({ url: '/pages/address/address' })

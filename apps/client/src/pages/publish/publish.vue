@@ -33,7 +33,7 @@
 
       <view class="actions">
         <view class="primary" :class="{ dis: !canPost }" @click="submit">
-          <text>{{ mode === 'post' ? '发布帖子' : '挂出闲置' }}</text>
+          <text>{{ submitting ? '发布中…' : mode === 'post' ? '发布帖子' : '挂出闲置' }}</text>
         </view>
       </view>
       <text class="note">demo 阶段不落库；真实版本接后端</text>
@@ -44,6 +44,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import NavShell from '@/components/NavShell.vue'
+import { api, errText } from '@/api/client'
 
 /** 帖子 / 闲置两种模式，对应「社区」与「二手交易」两条线 */
 const tabs = [
@@ -58,13 +59,35 @@ function pick(n: number): void {
   uni.showToast({ title: `配图位 ${n}（demo 用纯色占位）`, icon: 'none' })
 }
 
-function submit(): void {
-  if (!canPost.value) {
-    uni.showToast({ title: '写点什么再发吧', icon: 'none' })
+const submitting = ref(false)
+
+/**
+ * 发布到后端。
+ * 封面暂时用纯色（demo 阶段没有图片上传），真实接入图片后
+ * 这里换成上传返回的 URL 即可，接口字段不用改。
+ */
+async function submit(): Promise<void> {
+  if (!canPost.value || submitting.value) {
+    if (!canPost.value) uni.showToast({ title: '写点什么再发吧', icon: 'none' })
     return
   }
-  uni.showToast({ title: mode.value === 'post' ? '已发布（演示）' : '已挂出（演示）', icon: 'none' })
-  text.value = ''
+  submitting.value = true
+  try {
+    const palette = ['#c9b8a8', '#8fa3b0', '#a8b39a', '#b7a9c9', '#d3a9a0', '#c9a98a']
+    await api.createPost({
+      title: text.value.trim(),
+      coverHex: palette[Math.floor(Math.random() * palette.length)],
+      tags: mode.value === 'sell' ? ['闲置'] : ['穿搭'],
+      ratio: 1 + Math.round(Math.random() * 4) / 10,
+    })
+    uni.showToast({ title: mode.value === 'post' ? '已发布' : '已挂出', icon: 'none' })
+    text.value = ''
+    setTimeout(() => uni.reLaunch({ url: '/pages/home/home' }), 800)
+  } catch (e) {
+    uni.showModal({ title: '发布失败', content: errText(e), showCancel: false })
+  } finally {
+    submitting.value = false
+  }
 }
 </script>
 

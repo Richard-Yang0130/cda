@@ -81,6 +81,8 @@ import {
   type Product,
   type WardrobeItem,
 } from '@cda/core'
+import { api, errText } from '@/api/client'
+import { onShow } from '@dcloudio/uni-app'
 import { store, addWardrobeItem, removeWardrobeItem, hasProduct } from '@/store/app-store'
 
 const products = mockProducts
@@ -133,6 +135,31 @@ function goBack() {
 function goImport() {
   uni.navigateTo({ url: '/pages/import/import' })
 }
+
+/**
+ * 衣橱从后端拉。
+ * 注意：后端存的是「用户拥有哪些单品」这个事实，
+ * 单品的颜色/标题等展示信息仍来自 core 的本地商品表 ——
+ * 商品目录后续也应上后端，那时这里再换数据源。
+ */
+async function loadWardrobe(): Promise<void> {
+  try {
+    const res = await api.wardrobe()
+    const ids = new Set((res.items ?? []).map((i: any) => i.productId))
+    store.wardrobe = store.wardrobe.filter((w) => ids.has(w.productId))
+    for (const it of res.items ?? []) {
+      if (!store.wardrobe.some((w) => w.productId === it.productId)) {
+        store.wardrobe.push({ ...it, colorHex: '#cccccc' } as never)
+      }
+    }
+  } catch {
+    // 未登录或网络失败时保持本地视图
+  }
+}
+
+onShow(() => {
+  void loadWardrobe()
+})
 </script>
 
 <style scoped>

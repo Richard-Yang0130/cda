@@ -11,7 +11,7 @@
         <text class="adetail">{{ formatAddress(a) }}</text>
         <view class="acts">
           <text class="act" @click="edit(a)">编辑</text>
-          <text class="act" @click="setDefaultAddress(a.id)">设为默认</text>
+          <text class="act" @click="setDefault(a.id)">设为默认</text>
           <text class="act del" @click="del(a.id)">删除</text>
         </view>
       </view>
@@ -64,10 +64,12 @@
 
 <script setup lang="ts">
 import { computed, reactive, ref } from 'vue'
+import { onShow } from '@dcloudio/uni-app'
 import {
   PROVINCES, citiesOf, districtsOf, formatAddress, validateAddress, type Address,
 } from '@cda/core'
-import { store, upsertAddress, removeAddress, setDefaultAddress } from '@/store/app-store'
+import { store } from '@/store/app-store'
+import { api, errText } from '@/api/client'
 
 /**
  * 收货地址管理（分析得出的 P0）。
@@ -134,24 +136,67 @@ function edit(a: Address): void {
   open.value = true
 }
 
-function save(): void {
+/**
+ * 地址走后端。
+ * 本地仍保留一份到 store —— 下单页要读默认地址，不必再打一次接口。
+ */
+function syncLocal(list: any[]): void {
+  store.addresses = list.map((a) => ({ ...a })) as never
+}
+
+async function load(): Promise<void> {
+  try {
+    const res = await api.addresses()
+    syncLocal(res.addresses ?? [])
+  } catch (e) {
+    uni.showToast({ title: errText(e), icon: 'none' })
+  }
+}
+
+onShow(() => {
+  void load()
+})
+
+async function save(): Promise<void> {
   const check = validateAddress(form)
   if (!check.ok) {
     err.value = check.reason ?? '请检查填写内容'
     return
   }
-  upsertAddress({ ...form, id: form.id || `addr_${Date.now().toString(36)}` })
-  open.value = false
-  uni.showToast({ title: '已保存', icon: 'none' })
+  try {
+    const res = await api.saveAddress({ ...form })
+    syncLocal(res.addresses ?? [])
+    open.value = false
+    uni.showToast({ title: '已保存', icon: 'none' })
+  } catch (e) {
+    err.value = errText(e)
+  }
 }
 
 function del(id: string): void {
   uni.showModal({
     title: '删除该地址？',
-    success: (r) => {
-      if (r.confirm) removeAddress(id)
+    success: async (r) => {
+      if (!r.confirm) return
+      try {
+        const res = await api.deleteAddress(id)
+        syncLocal(res.addresses ?? [])
+      } catch (e) {
+        uni.showToast({ title: errText(e), icon: 'none' })
+      }
     },
   })
+}
+
+async function setDefault(id: string): Promise<void> {
+  const a = store.addresses.find((x) => x.id === id)
+  if (!a) return
+  try {
+    const res = await api.saveAddress({ ...a, isDefault: true })
+    syncLocal(res.addresses ?? [])
+  } catch (e) {
+    uni.showToast({ title: errText(e), icon: 'none' })
+  }
 }
 </script>
 

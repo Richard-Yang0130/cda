@@ -61,14 +61,18 @@
         </view>
       </view>
 
-      <text class="foot-note">帖子为演示数据 · 真实版本接后端分页</text>
+      <view class="more" @click="loadPosts(false)">
+        <text>{{ loading ? '加载中…' : hasMore ? '加载更多' : '没有更多了' }}</text>
+      </view>
     </view>
   </NavShell>
 </template>
 
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { mockPosts, type Post } from '@cda/core'
+import { onShow } from '@dcloudio/uni-app'
+import type { Post } from '@cda/core'
+import { api, errText } from '@/api/client'
 import NavShell from '@/components/NavShell.vue'
 
 /**
@@ -82,11 +86,43 @@ const keyword = ref('')
 const cats = ['推荐', '通勤', '叠穿', '小个子', '男装', '配饰']
 const activeCat = ref('推荐')
 
+/**
+ * 帖子来自后端。分页用 offset 累加，下拉到底再拉下一页。
+ * 搜索是**本地过滤已加载的帖子** —— 后端没做全文检索（10 人规模不值得），
+ * 真要搜全部内容时应改成后端接口。
+ */
+const all = ref<Post[]>([])
+const loading = ref(false)
+const hasMore = ref(true)
+const nextOffset = ref(0)
+
+async function loadPosts(reset = false): Promise<void> {
+  if (loading.value) return
+  if (!reset && !hasMore.value) return
+  loading.value = true
+  try {
+    const offset = reset ? 0 : nextOffset.value
+    const res = await api.posts(20, offset)
+    const list = (res.posts ?? []) as Post[]
+    all.value = reset ? list : [...all.value, ...list]
+    hasMore.value = !!res.hasMore
+    nextOffset.value = res.nextOffset ?? all.value.length
+  } catch (e) {
+    uni.showToast({ title: errText(e), icon: 'none' })
+  } finally {
+    loading.value = false
+  }
+}
+
+onShow(() => {
+  void loadPosts(true)
+})
+
 const shown = computed(() => {
   const k = keyword.value.trim()
-  if (!k) return mockPosts
-  return mockPosts.filter(
-    (p) => p.title.includes(k) || p.author.includes(k) || p.tags.some((t) => t.includes(k)),
+  if (!k) return all.value
+  return all.value.filter(
+    (p) => (p.title ?? '').includes(k) || (p.author ?? '').includes(k) || (p.tags ?? []).some((t) => t.includes(k)),
   )
 })
 
@@ -241,6 +277,8 @@ function openPost(po: Post): void {
   color: #b0b0b0;
   margin-left: auto;
 }
+.more { padding: 18px 0 4px; text-align: center; }
+.more text { font-size: 12px; color: #9a9a9a; }
 .foot-note {
   display: block;
   text-align: center;

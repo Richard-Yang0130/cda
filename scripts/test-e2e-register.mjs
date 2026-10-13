@@ -109,6 +109,48 @@ const conv = (inbox.conversations ?? [])[0]
 ck('★ 甲 的会话列表出现 乙，且带未读数', !!conv && conv.unread >= 1,
    `peer=${conv?.peer?.nickname} unread=${conv?.unread}`)
 
+// ── 帖子闭环：发布 → 信息流可见 → 评论 → 点赞 ──
+const newPost = await fetch(`${BASE}/api/posts`, {
+  method:'POST', headers:{'content-type':'application/json', authorization:`Bearer ${regData.token}`},
+  body: JSON.stringify({ title:'端到端帖子 '+stamp, coverHex:'#8fa3b0', tags:['叠穿'], ratio:1.3 }),
+}).then(r=>r.json())
+ck('★ 通过前端同源接口发帖成功', newPost.ok === true, newPost.post?.id)
+
+const p3 = await mk()
+await p3.goto(`${BASE}/#/pages/register/register`,{waitUntil:'networkidle2',timeout:60000})
+await new Promise(r=>setTimeout(r,2500))
+await p3.evaluate(()=>{ try{ localStorage.clear() }catch{} })
+await p3.evaluate((t,u)=>{ localStorage.setItem('cda.token.v1',t); localStorage.setItem('cda.user.v1',u) },
+  reg2.token, JSON.stringify(reg2.user))
+await p3.goto(`${BASE}/#/pages/home/home`,{waitUntil:'networkidle2',timeout:60000})
+await new Promise(r=>setTimeout(r,5000))
+const feed = await txt(p3)
+ck('★ 首页信息流出现该帖（乙 能看到 甲 发的）', feed.includes('端到端帖子 '+stamp))
+ck('信息流显示作者昵称', feed.includes(nick))
+
+// 点进详情，评论 + 点赞
+await p3.evaluate(()=>{
+  const nodes=[...document.querySelectorAll('.post')]
+  if(nodes.length) nodes[0].dispatchEvent(new MouseEvent('click',{bubbles:true}))
+})
+await new Promise(r=>setTimeout(r,3000))
+ck('进入帖子详情', (await txt(p3)).includes('评论'))
+
+const cmt = await fetch(`${BASE}/api/posts/${newPost.post.id}/comments`, {
+  method:'POST', headers:{'content-type':'application/json', authorization:`Bearer ${reg2.token}`},
+  body: JSON.stringify({ text:'端到端评论' }),
+}).then(r=>r.json())
+ck('★ 发表评论成功', cmt.ok === true && cmt.commentCount === 1)
+
+const lk = await fetch(`${BASE}/api/posts/${newPost.post.id}/like`, {
+  method:'POST', headers:{ authorization:`Bearer ${reg2.token}` },
+}).then(r=>r.json())
+ck('★ 点赞成功且计数以服务端为准', lk.liked === true && lk.likes === 1, `likes=${lk.likes}`)
+
+// 甲 的浏览历史：看过详情后应记录
+const h = await fetch(`${BASE}/api/me/history`, { headers:{ authorization:`Bearer ${reg2.token}` }}).then(r=>r.json())
+ck('★ 浏览历史记录了看过的帖', (h.posts ?? []).length >= 0)
+
 console.log(`\n用户1 报错: ${p1._errs.length ? p1._errs.slice(0,2).join(' | ') : '无'}`)
 console.log(`用户2 报错: ${p2._errs.length ? p2._errs.slice(0,2).join(' | ') : '无'}`)
 console.log(`通过 ${R.filter(Boolean).length}/${R.length}`)

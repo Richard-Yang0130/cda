@@ -30,8 +30,24 @@
             </view>
           </view>
 
+          <!-- 评论 -->
+          <text class="c-title">评论 {{ comments.length }}</text>
+          <view class="c-input">
+            <input v-model="commentText" class="c-inp" placeholder="说点什么…" placeholder-class="ph" @confirm="submitComment" />
+            <view class="c-send" :class="{ dis: !commentText.trim() }" @click="submitComment"><text>发送</text></view>
+          </view>
+          <view v-for="c in comments" :key="c.id" class="c-item">
+            <view class="c-av" :style="{ background: c.avatarHex }" />
+            <view class="c-body">
+              <text class="c-name">{{ c.author }}</text>
+              <text class="c-text">{{ c.text }}</text>
+            </view>
+          </view>
+          <view v-if="!comments.length" class="c-none"><text>还没有评论</text></view>
+
           <view class="actions">
             <view class="act" @click="like"><text>♡ 喜欢</text></view>
+            <view class="act" @click="favorite"><text>☆ 收藏</text></view>
             <view class="act" @click="collect"><text>＋ 加入衣橱</text></view>
           </view>
         </view>
@@ -47,26 +63,71 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
-import { findPost, findProduct, formatPrice, type Post } from '@cda/core'
+import { findProduct, formatPrice, type Post } from '@cda/core'
+import { api, errText } from '@/api/client'
 import NavShell from '@/components/NavShell.vue'
 import { store, addWardrobeItem, hasProduct } from '@/store/app-store'
 
 const post = ref<Post | null>(null)
 const liked = ref(false)
 
-onLoad((q) => {
+const comments = ref<Array<{ id: string; text: string; author: string; avatarHex: string }>>([])
+const commentText = ref('')
+const loading = ref(true)
+
+onLoad(async (q) => {
   const id = (q as { id?: string } | undefined)?.id
-  post.value = id ? (findPost(id) ?? null) : null
+  if (!id) { loading.value = false; return }
+  try {
+    const res = await api.post(id)
+    post.value = res.post as Post
+    liked.value = !!res.post?.likedByMe
+    const cs = await api.comments(id)
+    comments.value = cs.comments ?? []
+  } catch (e) {
+    post.value = null
+    uni.showToast({ title: errText(e), icon: 'none' })
+  } finally {
+    loading.value = false
+  }
 })
+
+async function submitComment(): Promise<void> {
+  const text = commentText.value.trim()
+  if (!text || !post.value) return
+  try {
+    const res = await api.addComment(post.value.id, text)
+    comments.value.unshift(res.comment)
+    if (post.value) post.value.comments = res.commentCount
+    commentText.value = ''
+  } catch (e) {
+    uni.showToast({ title: errText(e), icon: 'none' })
+  }
+}
 
 const product = computed(() => (post.value?.linkedProductId ? findProduct(post.value.linkedProductId) : undefined))
 const swatch = computed(() => product.value?.colors[0]?.hex ?? '#dddddd')
 
-function like(): void {
-  if (!post.value || liked.value) return
-  liked.value = true
-  post.value.likes += 1
-  uni.showToast({ title: '已喜欢', icon: 'none' })
+/** 点赞：走后端，计数以服务端为准（避免多人同时点时前端算错） */
+async function like(): Promise<void> {
+  if (!post.value) return
+  try {
+    const res = await api.like(post.value.id)
+    liked.value = res.liked
+    post.value.likes = res.likes
+  } catch (e) {
+    uni.showToast({ title: errText(e), icon: 'none' })
+  }
+}
+
+async function favorite(): Promise<void> {
+  if (!post.value) return
+  try {
+    const res = await api.favorite(post.value.id)
+    uni.showToast({ title: res.favorited ? '已收藏' : '已取消收藏', icon: 'none' })
+  } catch (e) {
+    uni.showToast({ title: errText(e), icon: 'none' })
+  }
 }
 
 function collect(): void {
@@ -205,6 +266,19 @@ function tryOn(): void {
   color: #fff;
   font-size: 13px;
 }
+.c-title { display: block; font-size: 13.5px; font-weight: 600; margin: 22px 0 10px; }
+.c-input { display: flex; gap: 9px; margin-bottom: 14px; }
+.c-inp { flex: 1; height: 40px; background: #f2f2f2; border-radius: 20px; padding: 0 15px; font-size: 13.5px; box-sizing: border-box; }
+.ph { color: #b0b0b0; }
+.c-send { padding: 0 17px; height: 40px; border-radius: 20px; background: #1a1a1a; display: flex; align-items: center; }
+.c-send.dis { background: #cfcfcf; }
+.c-send text { color: #fff; font-size: 13px; }
+.c-item { display: flex; gap: 10px; padding: 10px 0; border-bottom: 1px solid #f6f6f6; }
+.c-av { width: 30px; height: 30px; border-radius: 50%; flex-shrink: 0; }
+.c-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.c-name { font-size: 11.5px; color: #9a9a9a; }
+.c-text { font-size: 13px; color: #222; line-height: 19px; }
+.c-none { padding: 22px 0; text-align: center; color: #b8b8b8; font-size: 12px; }
 .actions {
   display: flex;
   gap: 10px;
