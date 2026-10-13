@@ -442,3 +442,41 @@ export function healthMetrics(profile: BodyProfile): HealthMetric[] {
     },
   ]
 }
+
+/**
+ * 由身高体重估算三围。
+ *
+ * 调研依据：
+ *   沿用本项目 body-model 已有的耦合模型 —— 它把「脂肪量」作为单一隐变量，
+ *   用 BMI 驱动各围度，锚点按**中国标准**校准：
+ *     BMI 健康区间 18.5–23.9（中国成人标准，非 WHO 的 18.5–24.9）
+ *     腰围上限 男 90 / 女 85 cm
+ *     腰高比 < 0.5、腰臀比 男 0.9 / 女 0.85
+ *   这些阈值来自中国肥胖问题工作组（WGOC）与《中国成人超重和肥胖症
+ *   预防控制指南》，比欧美标准更严 —— 对亚洲人群更合适。
+ *
+ * 为什么不另写一套公式：现有模型已经过大量可视化与数值校验
+ *   （scripts/audit-body.ts 的 68 个用例），另起一套必然与它不一致，
+ *   会出现「估算值填进去、人偶却是另一个体型」的割裂。
+ *
+ * ⚠️ 这是**估算**，用于帮用户少填几个数；用户仍可逐项修改。
+ */
+export function estimateGirths(
+  gender: Gender,
+  heightCm: number,
+  weightKg: number,
+): { chestCm: number; waistCm: number; hipCm: number; bmi: number } {
+  // 1) 由身高体重得到状态，再取 BMI 对应的脂肪量
+  let st = createBodyState(gender)
+  st = setHeight(st, heightCm)
+  st = setWeight(st, weightKg)
+  const bmi = weightKg / Math.pow(heightCm / 100, 2)
+
+  // 2) 直接用模型的锚点插值取各围度（与 3D 人偶完全同源）
+  return {
+    chestCm: Math.round(girthAt(st, 'chestCm') * 10) / 10,
+    waistCm: Math.round(girthAt(st, 'waistCm') * 10) / 10,
+    hipCm: Math.round(girthAt(st, 'hipCm') * 10) / 10,
+    bmi: Math.round(bmi * 10) / 10,
+  }
+}

@@ -129,6 +129,17 @@
           <text class="hwhint">点数字滚动选择，或直接输入（支持 0.5，如 177.5）</text>
         </view>
 
+        <view class="estbar">
+          <view class="estbtn" @click="doEstimate">
+            <text>按身高体重估算三围</text>
+          </view>
+          <text v-if="bmiText" class="estbmi">{{ bmiText }}</text>
+        </view>
+        <text class="esthint">
+          依据中国成人标准（BMI 健康区间 18.5–23.9、腰围上限男 90/女 85cm、
+          腰高比 &lt;0.5）由身高体重推算，可逐项修改
+        </text>
+
         <text class="lab">三围</text>
         <view class="girths">
           <view v-for="f in girthFields" :key="f.key" class="gcol">
@@ -175,6 +186,10 @@
         </view>
 
         <!-- 已选（有序，可删） -->
+        <view v-if="!draft.brands.length" class="skipnote">
+          <text>这一步可以跳过 —— 之后随时能在个人主页补充</text>
+        </view>
+
         <view v-if="draft.brands.length" class="picked">
           <view v-for="(bid, i) in draft.brands" :key="bid" class="pk" @click="removeBrand(bid)">
             <text class="pkno">{{ i + 1 }}</text>
@@ -234,6 +249,8 @@
     <!-- 底部操作 -->
     <view class="foot">
       <view v-if="step > 1" class="btn ghost" @click="step--"><text>上一步</text></view>
+      <!-- 第 5 步是选填，给出明确的跳过入口 -->
+      <view v-if="step === 5" class="btn ghost" @click="skipBrands"><text>跳过</text></view>
       <view class="btn" :class="{ dis: !gate.ok }" @click="next">
         <text>{{ step === 6 ? '完成注册' : '下一步' }}</text>
       </view>
@@ -248,7 +265,7 @@ import { onLoad } from '@dcloudio/uni-app'
 import {
   FASHION_STYLES, LOGIN_LABEL, MAX_FAVORITE_BRANDS, REGISTER_STEPS,
   ageFromBirthday, canAdvance, emptyDraft, findBrand, findStyle,
-  recommendBrands, searchBrands, DEFAULT_PRIVACY,
+  recommendBrands, searchBrands, DEFAULT_PRIVACY, estimateGirths,
   type LoginMethod, type RegisterDraft, type UserProfile,
 } from '@cda/core'
 import { commitUser, nextUserCode } from '@/store/app-store'
@@ -382,6 +399,29 @@ const methods = (['phone', 'wechat', 'qq', 'email'] as LoginMethod[]).map((id) =
  * 范围按性别给出合理上下限，超出即报错且不写入。
  */
 const girthErr = reactive<Record<string, string>>({})
+const bmiText = ref('')
+
+/** 由身高体重估算三围 —— 复用 3D 人偶同一套耦合模型，避免「填的数与人偶不符」 */
+function doEstimate(): void {
+  const h = Number((draft as never as Record<string, unknown>).heightCm)
+  const w = Number((draft as never as Record<string, unknown>).weightKg)
+  if (!Number.isFinite(h) || !Number.isFinite(w)) {
+    uni.showToast({ title: '请先填写身高体重', icon: 'none' })
+    return
+  }
+  const r = estimateGirths(draft.gender ?? 'female', h, w)
+  draft.chestCm = Math.round(r.chestCm)
+  draft.waistCm = Math.round(r.waistCm)
+  draft.hipCm = Math.round(r.hipCm)
+  // 估算值同样要过校验，不合法就提示
+  for (const f of girthFields) {
+    const v = (draft as never as Record<string, number>)[f.key]
+    const { min, max } = girthRange(f.key)
+    girthErr[f.key] = v < min || v > max ? `${min}–${max}` : ''
+  }
+  bmiText.value = `BMI ${r.bmi}`
+  uni.showToast({ title: `已估算：${draft.chestCm} / ${draft.waistCm} / ${draft.hipCm}`, icon: 'none' })
+}
 function girthRange(key: string): { min: number; max: number } {
   const fem = draft.gender !== 'male'
   if (key === 'chestCm') return fem ? { min: 68, max: 120 } : { min: 76, max: 130 }
@@ -483,6 +523,11 @@ function toggleBrand(id: string): void {
 function removeBrand(id: string): void {
   const i = draft.brands.indexOf(id)
   if (i >= 0) draft.brands.splice(i, 1)
+}
+
+function skipBrands(): void {
+  draft.brands = []
+  step.value++
 }
 
 function next(): void {
@@ -618,6 +663,18 @@ function finish(): void {
 }
 .hwpen { position: absolute; right: 5px; top: 11px; font-size: 11px; color: #b0b0b0; pointer-events: none; }
 .hwhint { display: block; font-size: 10.5px; color: #a8a8a8; line-height: 15px; padding: 4px 0 2px; }
+.estbar { display: flex; align-items: center; gap: 10px; margin: 16px 0 6px; }
+.estbtn {
+  flex: 1; height: 40px; border-radius: 11px; background: #eef2f5;
+  border: 1px solid #d8e0e6; display: flex; align-items: center; justify-content: center;
+}
+.estbtn text { font-size: 13px; color: #3d5a6c; font-weight: 600; }
+.estbmi { font-size: 11.5px; color: #6a8a9a; flex-shrink: 0; }
+.esthint { display: block; font-size: 10px; color: #a8a8a8; line-height: 15px; margin-bottom: 4px; }
+.skipnote {
+  margin: 10px 0 4px; padding: 10px 12px; background: #f7f5f2; border-radius: 10px;
+}
+.skipnote text { font-size: 11px; color: #8a8a8a; line-height: 16px; }
 .girths { display: flex; gap: 10px; }
 .gcol { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
 .glabel { font-size: 12px; color: #666; text-align: center; }

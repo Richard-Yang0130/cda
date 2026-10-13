@@ -601,6 +601,8 @@ let lastStagePoint: { x: number; y: number } | null = null
 function onStageTouchStart(e: any) {
   const t = e.touches?.[0]
   if (!t) return
+  // 记录起点，供轻点拾取判断是否发生了拖动
+  tapStart = { x: t.clientX, y: t.clientY, t: Date.now() }
   lastStagePoint = { x: t.clientX, y: t.clientY }
 }
 
@@ -612,7 +614,44 @@ function onStageTouchMove(e: any) {
   lastStagePoint = { x: t.clientX, y: t.clientY }
 }
 
-function onStageTouchEnd() {
+/*
+ * 舞台轻点拾取：点中哪件衣服就脱哪件。
+ *
+ * 必须与「拖动旋转」区分开 —— 判据是位移小于 8px 且时长小于 350ms，
+ * 否则用户每次转视角都会误脱衣服。
+ */
+let tapStart: { x: number; y: number; t: number } | null = null
+const TAP_MOVE = 8
+const TAP_MS = 350
+
+function pickOffAt(clientX: number, clientY: number): void {
+  if (!engine || !worn.value.length) return
+  // 画布位置：跨端用 createSelectorQuery，避免依赖 DOM
+  uni
+    .createSelectorQuery()
+    .select('#tryon-stage')
+    .boundingClientRect((rect) => {
+      const r = rect as { left: number; top: number; width: number; height: number } | null
+      if (!r?.width) return
+      const hit = engine?.pickGarment(clientX, clientY, r) ?? null
+      if (hit) {
+        takeOff(hit)
+        stageHint.value = `已脱下「${findProduct(hit)?.title ?? hit}」`
+      }
+    })
+    .exec()
+}
+
+function onStageTouchEnd(e: any) {
+  const t = e?.changedTouches?.[0] ?? e?.touches?.[0]
+  if (tapStart && t) {
+    const dx = t.clientX - tapStart.x
+    const dy = t.clientY - tapStart.y
+    if (Math.sqrt(dx * dx + dy * dy) < TAP_MOVE && Date.now() - tapStart.t < TAP_MS) {
+      pickOffAt(t.clientX, t.clientY)
+    }
+  }
+  tapStart = null
   lastStagePoint = null
 }
 
@@ -719,8 +758,9 @@ function onDragEnd(e: any) {
 }
 
 function onItemClick(item: { productId: string }) {
-  // 点击直接穿上（触摸设备上比拖拽更省力）
-  if (isWorn(item.productId)) selectGarment(item.productId)
+  // 点击直接穿上（触摸设备上比拖拽更省力）；
+  // **已穿的再点一下就是脱下** —— 省得为了脱一件而「全部脱下」
+  if (isWorn(item.productId)) takeOff(item.productId)
   else wear(item.productId)
 }
 </script>

@@ -333,6 +333,42 @@ export class TryonEngine {
     return this.garments.has(productId)
   }
 
+  /**
+   * 屏幕坐标拾取服装 —— 用于「点一下已穿的衣服就能脱下」。
+   *
+   * 只对服装做射线检测，**不检测人偶身体**：
+   * 用户点身体是想旋转视角，点衣服才是想脱。
+   * 命中多个时取最近的（最外层那件）。
+   *
+   * @param clientX/clientY 触摸或鼠标的屏幕坐标
+   * @param rect             画布的位置与尺寸（getBoundingClientRect）
+   */
+  pickGarment(
+    clientX: number,
+    clientY: number,
+    rect: { left: number; top: number; width: number; height: number },
+  ): string | null {
+    if (!this.garments.size || rect.width <= 0 || rect.height <= 0) return null
+    const ndc = new THREE.Vector2(
+      ((clientX - rect.left) / rect.width) * 2 - 1,
+      -((clientY - rect.top) / rect.height) * 2 + 1,
+    )
+    const ray = new THREE.Raycaster()
+    ray.setFromCamera(ndc, this.camera)
+    // 逐个单品求交，便于把命中的 mesh 映射回 productId
+    let bestId: string | null = null
+    let bestDist = Infinity
+    for (const [productId, g] of this.garments) {
+      const hits = ray.intersectObject(g.object3D, true)
+      const d = hits[0]?.distance
+      if (d !== undefined && d < bestDist) {
+        bestDist = d
+        bestId = productId
+      }
+    }
+    return bestId
+  }
+
   listGarments(): string[] {
     return [...this.garments.keys()]
   }
