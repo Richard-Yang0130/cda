@@ -1,12 +1,17 @@
 <template>
+  <NavShell current="/pages/messages/messages">
   <view class="page">
     <!-- 聊天视图 -->
     <template v-if="active">
       <view class="chathead">
         <text class="back" @click="active = null">‹</text>
-        <view class="chinfo">
-          <text class="chname">{{ active.name }}</text>
-          <text class="chpresence">{{ active.presence || '—' }}</text>
+        <!-- 头像与昵称都可点进对方主页（用户反馈：私聊界面没有入口到他人主页） -->
+        <view class="chinfo" @click="openPeer">
+          <view class="chav" :style="{ background: active.hex }" />
+          <view class="chtext">
+            <text class="chname">{{ active.name }}</text>
+            <text class="chpresence">{{ active.presence || '—' }}</text>
+          </view>
         </view>
         <text class="chmore" @click="peerActions">⋯</text>
       </view>
@@ -50,7 +55,7 @@
         <!-- 会话列表 -->
         <template v-else>
           <text class="group">消息</text>
-          <view v-for="c in convs" :key="c.id" class="row" @click="active = c">
+          <view v-for="c in convs" :key="c.id" class="row" @click="openConv(c)">
             <view class="av" :style="{ background: c.hex }" />
             <view class="info">
               <text class="nm">{{ c.name }}</text>
@@ -66,10 +71,13 @@
       </scroll-view>
     </template>
   </view>
+  </NavShell>
 </template>
 
 <script setup lang="ts">
+import NavShell from '@/components/NavShell.vue'
 import { computed, ref } from 'vue'
+import { onShow } from '@dcloudio/uni-app'
 import { presenceText, type UserProfile } from '@cda/core'
 import { store } from '@/store/app-store'
 
@@ -97,7 +105,35 @@ const peers: Array<Pick<UserProfile, 'code' | 'nickname' | 'avatarHex' | 'isOnli
   { code: 'CDA_00000033', nickname: '小满', avatarHex: '#d3a9a0', isOnline: false, lastSeenAt: new Date(Date.now() - 86400e3 * 2).toISOString(), privacy: { hideFromSearch: false, hideOnlineStatus: false, hideRegion: false, allowStrangerMessage: true } },
 ]
 
-const convs = ref<Conv[]>([
+/*
+ * 历史消息持久化。
+ * 之前会话只存在内存里，**刷新页面聊天记录就没了** ——
+ * 用户明确要求「能读历史消息记录」。
+ * 真实版本由后端存；这里先落本地，接后端时只换这一层。
+ */
+const CONV_KEY = 'cda.conversations.v1'
+
+function saveConvs(): void {
+  try {
+    uni.setStorageSync(CONV_KEY, JSON.stringify(convs.value))
+  } catch {
+    /* 存储不可用时静默降级，不阻断聊天 */
+  }
+}
+
+function loadConvs(): Conv[] | null {
+  try {
+    const raw = uni.getStorageSync(CONV_KEY)
+    if (!raw) return null
+    const list = JSON.parse(raw as string) as Conv[]
+    return Array.isArray(list) && list.length ? list : null
+  } catch {
+    return null
+  }
+}
+
+/** 首次进入的示例会话（仅在本地无记录时使用） */
+const seedConvs: Conv[] = [
   {
     id: 'c1', name: '林', code: 'CDA_00000007', hex: '#c9b8a8',
     presence: presenceText(peers[0]!), unread: 1,
@@ -111,7 +147,15 @@ const convs = ref<Conv[]>([
     presence: presenceText(peers[1]!), unread: 0,
     messages: [{ id: 'm3', text: '牛仔外套还有 M 码吗', time: '昨天', fromMe: false }],
   },
-])
+]
+
+const convs = ref<Conv[]>(seedConvs)
+
+// 页面显示时读取本地记录（这样从聊天返回列表也能看到最新消息）
+onShow(() => {
+  const saved = loadConvs()
+  if (saved) convs.value = saved
+})
 
 /** 搜索：昵称或用户码，且尊重对方的「不被搜索到」隐私设置 */
 const found = computed(() => {
@@ -138,6 +182,7 @@ function openChat(u: { id: string; name: string; code: string; hex: string; pres
   if (existing) {
     active.value = existing
     existing.unread = 0
+    saveConvs()
     return
   }
   const conv: Conv = {
@@ -145,7 +190,17 @@ function openChat(u: { id: string; name: string; code: string; hex: string; pres
     presence: u.presence, unread: 0, messages: [],
   }
   convs.value.push(conv)
+  saveConvs()
   active.value = conv
+}
+
+/** 进入会话时滚到最新一条，方便续读历史 */
+function openConv(c: Conv): void {
+  active.value = c
+  c.unread = 0
+  saveConvs()
+  // 延后触发，等消息渲染完
+  setTimeout(() => (scrollTop.value += 100000), 120)
 }
 
 function send(): void {
@@ -159,7 +214,14 @@ function send(): void {
     fromMe: true,
   })
   draft.value = ''
+  saveConvs() // 落盘，刷新后仍在
   scrollTop.value += 1000 // 触发滚动到底
+}
+
+function openPeer(): void {
+  const c = active.value
+  if (!c) return
+  uni.navigateTo({ url: `/pages/user/user?code=${c.code}` })
 }
 
 /** 会话内的更多操作：关注 / 拉黑（P0-2） */
@@ -199,7 +261,9 @@ void store
 
 .chathead { display: flex; align-items: center; gap: 12px; padding: 13px 16px; background: #fff; border-bottom: 1px solid #f0f0f0; }
 .back { font-size: 24px; color: #333; line-height: 24px; }
-.chinfo { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.chinfo { flex: 1; min-width: 0; display: flex; align-items: center; gap: 9px; }
+.chav { width: 32px; height: 32px; border-radius: 50%; flex-shrink: 0; }
+.chtext { display: flex; flex-direction: column; gap: 2px; }
 .chname { font-size: 15px; font-weight: 600; }
 .chpresence { font-size: 10.5px; color: #9a9a9a; }
 .chmore { font-size: 20px; color: #9a9a9a; }

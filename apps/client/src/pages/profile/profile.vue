@@ -1,6 +1,11 @@
 <template>
   <NavShell current="/pages/profile/profile">
   <view class="page">
+    <!-- 设置移到右上角，用齿轮（螺帽）图标 —— 原先混在下方列表里不显眼 -->
+    <view class="topbar">
+      <view class="gear" @click="goSettings"><text class="gear-icon">⚙</text></view>
+    </view>
+
     <view class="hero">
       <!-- 已注册则展示真实用户（头像/昵称/用户码/在线状态），未注册回落到默认 -->
       <view class="avatar" :style="store.user ? { background: store.user.avatarHex } : {}">
@@ -52,12 +57,6 @@
     <view class="settings-entry" @click="goAddress">
       <text class="set-t">收货地址</text>
       <text class="set-s">{{ store.addresses.length ? store.addresses.length + ' 个地址' : '还没有收货地址' }}</text>
-      <text class="arrow">›</text>
-    </view>
-
-    <view class="settings-entry" @click="goSettings">
-      <text class="set-t">设置</text>
-      <text class="set-s">隐私 · 账号 · 通知 · 关于</text>
       <text class="arrow">›</text>
     </view>
 
@@ -246,6 +245,18 @@ restoreBodyState()
   background: #fbfbfb;
   padding: 18px 16px 30px;
 }
+.topbar { display: flex; justify-content: flex-end; margin-bottom: 4px; }
+.gear {
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+  background: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 1px 7px rgba(0,0,0,.05);
+}
+.gear-icon { font-size: 19px; color: #333; line-height: 19px; }
 .hero {
   display: flex;
   align-items: center;

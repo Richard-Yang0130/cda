@@ -32,11 +32,13 @@
         <text v-else class="tab-label">{{ it.short }}</text>
       </view>
     </view>
-  </view>
+    <ReleaseNote ref="releaseRef" />
+</view>
 </template>
 
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
+import ReleaseNote from '@/components/ReleaseNote.vue'
 import { store, restoreUser, restoreAddresses } from '@/store/app-store'
 
 /**
@@ -69,7 +71,11 @@ const items = [
  * 放在 NavShell 而不是各页面，是因为主页面都用了这个外壳 ——
  * 一处拦截即全覆盖，新增页面也不会漏。
  */
+const releaseRef = ref<InstanceType<typeof ReleaseNote> | null>(null)
+
 onMounted(() => {
+  // 版本更新说明：升级后弹一次，让用户感知到改了什么
+  releaseRef.value?.check()
   restoreUser()
   restoreAddresses()
   if (!store.user) {

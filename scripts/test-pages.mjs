@@ -11,7 +11,7 @@ const PAGES = [
   ['注册-第1步',  '#/pages/register/register',       ['选择登录方式', '手机号', '微信']],
   ['消息页',      '#/pages/messages/messages',       ['搜索用户', '消息']],
   ['设置页',      '#/pages/settings/settings',       ['不被搜索到', '注销账号', '支付方式', '国家与地区']],
-  ['个人主页',    '#/pages/profile/profile',         ['我的收藏', '我的关注', '浏览历史', '设置']],
+  ['个人主页',    '#/pages/profile/profile',         ['我的收藏', '我的关注', '浏览历史', '收货地址']],
   ['我的人偶',    '#/pages/persona/persona',         ['身高', '胸围', '肩宽']],
   ['衣橱',        '#/pages/wardrobe/wardrobe',       []],
   ['发布',        '#/pages/publish/publish',         ['发帖子', '卖闲置']],

@@ -100,40 +100,50 @@
           <view class="picker"><text>{{ draft.birthday || '请选择' }}</text><text class="age">{{ age !== null ? `（${age} 岁）` : '' }}</text></view>
         </picker>
 
-        <text class="lab">身高 / 体重（滚轮选择，支持 0.5 精度）</text>
-        <view v-for="f in halfFields" :key="f.key" class="row">
-          <text class="rlab">{{ f.label }}</text>
-          <picker
-            class="pk"
-            mode="selector"
-            :range="f.options"
-            :value="pickerIndex(f)"
-            @change="(e: any) => onPick(f, e.detail.value)"
-          >
-            <view class="pkbox">
-              <text class="pkval">{{ fmt((draft as any)[f.key]) }}{{ f.unit }}</text>
-              <text class="pkarrow">▾</text>
+        <view class="hwcard">
+          <view v-for="f in halfFields" :key="f.key" class="hwrow">
+            <text class="hwlabel">{{ f.label }}</text>
+            <picker
+              class="hwpick"
+              mode="selector"
+              :range="f.options"
+              :value="pickerIndex(f)"
+              @change="(e: any) => onPick(f, e.detail.value)"
+            >
+              <view class="hwval">
+                <text class="hwnum">{{ fmt((draft as any)[f.key]) }}</text>
+                <text class="hwunit">{{ f.unit }}</text>
+                <text class="hwarrow">⌄</text>
+              </view>
+            </picker>
+            <view class="hwtype">
+              <input
+                class="hwinput"
+                type="digit"
+                :value="String((draft as any)[f.key])"
+                @blur="(e: any) => onType(f, e.detail.value)"
+              />
+              <text class="hwpen">✎</text>
             </view>
-          </picker>
-          <input
-            class="tinynum"
-            type="digit"
-            :value="String((draft as any)[f.key])"
-            @blur="(e: any) => onType(f, e.detail.value)"
-          />
+          </view>
+          <text class="hwhint">点数字滚动选择，或直接输入（支持 0.5，如 177.5）</text>
         </view>
 
         <text class="lab">三围</text>
-        <view v-for="f in girthFields" :key="f.key" class="row">
-          <text class="rlab">{{ f.label }}</text>
-          <slider
-            class="sld"
-            :value="(draft as any)[f.key]"
-            :min="f.min" :max="f.max" :step="1"
-            activeColor="#1a1a1a" block-color="#1a1a1a" :block-size="14"
-            @change="(e: any) => ((draft as any)[f.key] = e.detail.value)"
-          />
-          <text class="rval">{{ (draft as any)[f.key] }}{{ f.unit }}</text>
+        <view class="girths">
+          <view v-for="f in girthFields" :key="f.key" class="gcol">
+            <text class="glabel">{{ f.label }}</text>
+            <view class="gbox" :class="{ bad: !!girthErr[f.key] }">
+              <input
+                class="ginput"
+                type="digit"
+                :value="String((draft as any)[f.key])"
+                @blur="(e: any) => onGirth(f, e.detail.value)"
+              />
+              <text class="gunit">cm</text>
+            </view>
+            <text v-if="girthErr[f.key]" class="gerr">{{ girthErr[f.key] }}</text>
+          </view>
         </view>
       </view>
 
@@ -349,6 +359,10 @@ const cur = computed(() => steps[step.value - 1]!)
 const gate = computed(() => {
   const base = canAdvance(step.value, draft, MAX_BRANDS)
   if (!base.ok) return base
+  // 第 3 步：三围有校验错误时不得继续
+  if (step.value === 3 && Object.values(girthErr).some((x) => x)) {
+    return { ok: false, reason: '三围填写有误，请检查' }
+  }
   // 第 1 步的额外校验：手机号方式必须通过验证码
   if (step.value === 1 && draft.loginMethod === 'phone' && !codeValid.value) {
     return { ok: false, reason: codeSent.value ? '请输入 6 位验证码' : '请先获取验证码' }
@@ -362,10 +376,37 @@ const methods = (['phone', 'wechat', 'qq', 'email'] as LoginMethod[]).map((id) =
   hex: { phone: '#8fa3b0', wechat: '#5aa35a', qq: '#4a8fd0', email: '#c9a98a' }[id],
 }))
 
+/**
+ * 三围改为输入框 + 校验（原先滑杆在手机上很难精确调到某一数值，
+ * 而且视觉上与大面积的白色背景糊在一起）。
+ * 范围按性别给出合理上下限，超出即报错且不写入。
+ */
+const girthErr = reactive<Record<string, string>>({})
+function girthRange(key: string): { min: number; max: number } {
+  const fem = draft.gender !== 'male'
+  if (key === 'chestCm') return fem ? { min: 68, max: 120 } : { min: 76, max: 130 }
+  if (key === 'waistCm') return fem ? { min: 52, max: 110 } : { min: 60, max: 125 }
+  return fem ? { min: 76, max: 130 } : { min: 80, max: 135 }
+}
+function onGirth(f: { key: string; label: string }, raw: string): void {
+  const v = Number(raw)
+  const { min, max } = girthRange(f.key)
+  if (raw.trim() === '' || !Number.isFinite(v)) {
+    girthErr[f.key] = '请输入数字'
+    return
+  }
+  if (v < min || v > max) {
+    girthErr[f.key] = `${min}–${max}`
+    return
+  }
+  girthErr[f.key] = ''
+  ;(draft as never as Record<string, number>)[f.key] = Math.round(v)
+}
+
 const girthFields = [
-  { key: 'chestCm', label: '胸围', unit: 'cm', min: 68, max: 130 },
-  { key: 'waistCm', label: '腰围', unit: 'cm', min: 50, max: 130 },
-  { key: 'hipCm', label: '臀围', unit: 'cm', min: 72, max: 140 },
+  { key: 'chestCm', label: '胸围' },
+  { key: 'waistCm', label: '腰围' },
+  { key: 'hipCm', label: '臀围' },
 ] as const
 
 const styles = FASHION_STYLES
@@ -481,14 +522,21 @@ function finish(): void {
 </script>
 
 <style scoped>
-.page { min-height: 100vh; background: #fbfbfb; display: flex; flex-direction: column; padding: 18px 16px 0; box-sizing: border-box; }
+/*
+ * 必须锁死视口高度。
+ * 原先只有 min-height: 100vh —— 内容一长页面就跟着变高，
+ * 「下一步」被顶到滚动区最底部，用户**必须滑到最底才能看到**
+ * （品牌页最长，所以那里最先暴露）。
+ * height + overflow:hidden 让内部 scroll-view 自己滚，底部按钮常驻。
+ */
+.page { height: 100vh; overflow: hidden; background: #fbfbfb; display: flex; flex-direction: column; padding: 18px 16px 0; box-sizing: border-box; }
 .prog { display: flex; gap: 6px; margin-bottom: 16px; }
 .pdot { flex: 1; height: 4px; border-radius: 2px; background: #e8e8e8; }
 .pdot.on { background: #1a1a1a; }
 .pdot.cur { background: #1a1a1a; }
 .ptitle { font-size: 20px; font-weight: 700; }
 .phint { display: block; font-size: 11.5px; color: #a0a0a0; margin: 4px 0 16px; }
-.body { flex: 1; min-height: 0; }
+.body { flex: 1; min-height: 0; height: 0; }
 .list, .form { display: flex; flex-direction: column; }
 .opt { display: flex; align-items: center; gap: 12px; padding: 14px; background: #fff; border-radius: 12px; margin-bottom: 9px; border: 1.5px solid transparent; }
 .opt.on { border-color: #1a1a1a; }
@@ -554,10 +602,33 @@ function finish(): void {
 .picker { height: 44px; background: #fff; border-radius: 11px; padding: 0 13px; display: flex; align-items: center; gap: 6px; }
 .picker text { font-size: 14px; }
 .age { color: #8a8a8a; font-size: 12.5px; }
-.row { display: flex; align-items: center; gap: 6px; margin-bottom: 2px; }
-.rlab { width: 42px; font-size: 11.5px; color: #666; flex-shrink: 0; }
-.sld { flex: 1; min-width: 0; }
-.rval { width: 58px; text-align: right; font-size: 11.5px; color: #333; flex-shrink: 0; }
+.hwcard { background: #fff; border-radius: 14px; padding: 6px 14px 10px; }
+.hwrow { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid #f4f4f4; }
+.hwrow:last-of-type { border-bottom: none; }
+.hwlabel { width: 40px; font-size: 13.5px; color: #333; font-weight: 600; flex-shrink: 0; }
+.hwpick { flex: 1; min-width: 0; }
+.hwval { display: flex; align-items: baseline; gap: 4px; }
+.hwnum { font-size: 24px; font-weight: 800; color: #111; letter-spacing: -.5px; }
+.hwunit { font-size: 12px; color: #9a9a9a; }
+.hwarrow { font-size: 13px; color: #b8b8b8; margin-left: 2px; }
+.hwtype { position: relative; width: 66px; height: 38px; flex-shrink: 0; }
+.hwinput {
+  width: 100%; height: 38px; background: #f5f5f5; border-radius: 10px;
+  text-align: center; font-size: 13.5px; color: #333; box-sizing: border-box;
+}
+.hwpen { position: absolute; right: 5px; top: 11px; font-size: 11px; color: #b0b0b0; pointer-events: none; }
+.hwhint { display: block; font-size: 10.5px; color: #a8a8a8; line-height: 15px; padding: 4px 0 2px; }
+.girths { display: flex; gap: 10px; }
+.gcol { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.glabel { font-size: 12px; color: #666; text-align: center; }
+.gbox {
+  display: flex; align-items: baseline; justify-content: center; gap: 3px;
+  background: #fff; border-radius: 11px; border: 1.5px solid transparent; padding: 0 8px; height: 46px;
+}
+.gbox.bad { border-color: #d98a86; background: #fdf6f6; }
+.ginput { flex: 1; min-width: 0; height: 46px; text-align: center; font-size: 19px; font-weight: 700; color: #111; }
+.gunit { font-size: 10.5px; color: #a8a8a8; flex-shrink: 0; }
+.gerr { font-size: 10px; color: #c0504d; text-align: center; }
 .grid { display: flex; flex-wrap: wrap; gap: 10px; }
 .scard { width: calc(50% - 5px); background: #fff; border-radius: 12px; overflow: hidden; border: 1.5px solid transparent; }
 .scard.on { border-color: #1a1a1a; }
@@ -592,7 +663,7 @@ function finish(): void {
 .smrow { display: flex; gap: 10px; padding: 5px 0; }
 .smk { width: 46px; font-size: 11.5px; color: #a0a0a0; flex-shrink: 0; }
 .smv { flex: 1; font-size: 11.5px; color: #333; line-height: 17px; }
-.foot { display: flex; gap: 10px; padding: 14px 0 6px; }
+.foot { display: flex; gap: 10px; padding: 14px 0 6px; flex-shrink: 0; background: #fbfbfb; }
 .btn { flex: 1; height: 46px; border-radius: 12px; background: #1a1a1a; display: flex; align-items: center; justify-content: center; }
 .btn.dis { background: #cfcfcf; }
 .btn.ghost { background: #f2f2f2; flex: 0 0 96px; }
