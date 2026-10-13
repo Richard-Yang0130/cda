@@ -10,18 +10,64 @@
     <scroll-view class="body" scroll-y>
       <!-- ① 登录方式 -->
       <view v-if="step === 1" class="list">
-        <view
-          v-for="m in methods"
-          :key="m.id"
-          class="opt"
-          :class="{ on: draft.loginMethod === m.id }"
-          @click="draft.loginMethod = m.id"
-        >
-          <view class="odot" :style="{ background: m.hex }" />
-          <text class="olabel">{{ m.label }}</text>
-          <text class="ocheck">{{ draft.loginMethod === m.id ? '✓' : '' }}</text>
-        </view>
-        <text class="warn">演示环境：不会真的发送验证码或跳转授权</text>
+        <!-- 1a 选方式 -->
+        <template v-if="!draft.loginMethod">
+          <view
+            v-for="m in methods"
+            :key="m.id"
+            class="opt"
+            @click="pickMethod(m.id)"
+          >
+            <view class="odot" :style="{ background: m.hex }" />
+            <text class="olabel">{{ m.label }}</text>
+            <text class="ocheck">{{ draft.loginMethod === m.id ? '✓' : '' }}</text>
+          </view>
+          <text class="warn">演示环境：不会真的发送验证码或跳转授权</text>
+        </template>
+
+        <!-- 1b 手机号（仅手机号方式） -->
+        <template v-else-if="draft.loginMethod === 'phone' && !codeSent">
+          <view class="backline" @click="resetMethod"><text>‹ 换一种方式</text></view>
+          <text class="lab">手机号</text>
+          <view class="prow">
+            <text class="pcc">+86</text>
+            <input
+              v-model="phone"
+              class="pinput"
+              type="number"
+              :maxlength="11"
+              placeholder="请输入 11 位手机号"
+              placeholder-class="ph"
+            />
+          </view>
+          <text v-if="phone && !phoneValid" class="err">手机号格式不正确（需 1 开头的 11 位数字）</text>
+          <view class="sendbtn" :class="{ dis: !phoneValid }" @click="sendCode">
+            <text>获取验证码</text>
+          </view>
+        </template>
+
+        <!-- 1c 验证码：6 个格子、大号加粗 -->
+        <template v-else>
+          <view class="backline" @click="codeSent = false"><text>‹ 修改手机号</text></view>
+          <text class="lab">验证码已发送至 +86 {{ phone }}</text>
+          <view class="codeboxes">
+            <view v-for="i in 6" :key="i" class="cbox" :class="{ filled: codeInput.length >= i, cur: codeInput.length === i - 1 }">
+              <text class="cdigit">{{ codeInput[i - 1] ?? '' }}</text>
+            </view>
+          </view>
+          <!-- 真实输入藏在下方，点格子聚焦（小程序与 H5 通用做法） -->
+          <input
+            v-model="codeInput"
+            class="hiddeninput"
+            type="number"
+            :maxlength="6"
+            :focus="codeFocus"
+            @blur="codeFocus = false"
+          />
+          <text v-if="codeInput.length === 6 && !codeValid" class="err">验证码不正确，请重新输入</text>
+          <view class="resend" @click="sendCode"><text>重新发送</text></view>
+          <text class="warn">演示环境：验证码通过弹窗直接给出，不会真的发短信</text>
+        </template>
       </view>
 
       <!-- ② 昵称与性别 -->
@@ -42,8 +88,31 @@
           <view class="picker"><text>{{ draft.birthday || '请选择' }}</text><text class="age">{{ age !== null ? `（${age} 岁）` : '' }}</text></view>
         </picker>
 
-        <text class="lab">身高 / 体重</text>
-        <view v-for="f in bodyFields" :key="f.key" class="row">
+        <text class="lab">身高 / 体重（滚轮选择，支持 0.5 精度）</text>
+        <view v-for="f in halfFields" :key="f.key" class="row">
+          <text class="rlab">{{ f.label }}</text>
+          <picker
+            class="pk"
+            mode="selector"
+            :range="f.options"
+            :value="pickerIndex(f)"
+            @change="(e: any) => onPick(f, e.detail.value)"
+          >
+            <view class="pkbox">
+              <text class="pkval">{{ fmt((draft as any)[f.key]) }}{{ f.unit }}</text>
+              <text class="pkarrow">▾</text>
+            </view>
+          </picker>
+          <input
+            class="tinynum"
+            type="digit"
+            :value="String((draft as any)[f.key])"
+            @blur="(e: any) => onType(f, e.detail.value)"
+          />
+        </view>
+
+        <text class="lab">三围</text>
+        <view v-for="f in girthFields" :key="f.key" class="row">
           <text class="rlab">{{ f.label }}</text>
           <slider
             class="sld"
@@ -173,9 +242,107 @@ const draft = reactive<RegisterDraft>(emptyDraft())
 const MAX_BRANDS = MAX_FAVORITE_BRANDS
 const brandKw = ref('')
 
+/* ── 手机号与验证码（演示版） ── */
+const phone = ref('')
+const codeSent = ref(false)
+/** 演示用：随机六位数字，通过弹窗直接给用户 */
+const sentCode = ref('')
+const codeInput = ref('')
+const codeFocus = ref(false)
+
+/** 中国大陆手机号：1 开头，第二位 3–9，共 11 位 */
+const PHONE_RE = /^1[3-9]\d{9}$/
+const phoneValid = computed(() => PHONE_RE.test(phone.value))
+const codeValid = computed(
+  () => codeInput.value.length === 6 && codeInput.value === sentCode.value,
+)
+
+function pickMethod(id: LoginMethod): void {
+  draft.loginMethod = id
+  // 非手机号方式没有验证码环节，直接进入下一步
+  if (id !== 'phone') codeSent.value = true
+}
+
+function resetMethod(): void {
+  draft.loginMethod = null
+  codeSent.value = false
+  phone.value = ''
+  codeInput.value = ''
+}
+
+function sendCode(): void {
+  if (!phoneValid.value) {
+    uni.showToast({ title: '请输入正确的 11 位手机号', icon: 'none' })
+    return
+  }
+  sentCode.value = String(Math.floor(100000 + Math.random() * 900000))
+  codeSent.value = true
+  codeInput.value = ''
+  codeFocus.value = true
+  uni.showModal({
+    title: '演示验证码',
+    content: `本次验证码：${sentCode.value}\n（真实环境由短信下发）`,
+    showCancel: false,
+  })
+}
+
+/* ── 身高体重：0.5 精度滚轮 + 手输 ── */
+interface HalfField {
+  key: 'heightCm' | 'weightKg'
+  label: string
+  unit: string
+  min: number
+  max: number
+  options: string[]
+}
+function halfRange(min: number, max: number): string[] {
+  const out: string[] = []
+  for (let v = min; v <= max + 1e-9; v += 0.5) out.push(v.toFixed(1))
+  return out
+}
+const halfFields: HalfField[] = [
+  { key: 'heightCm', label: '身高', unit: 'cm', min: 145, max: 205, options: halfRange(145, 205) },
+  { key: 'weightKg', label: '体重', unit: 'kg', min: 35, max: 130, options: halfRange(35, 130) },
+]
+function fmt(v: unknown): string {
+  // 防御：状态里若混入字符串（URL 参数、手输中间态），不能让它把页面打崩
+  const n = typeof v === 'number' ? v : Number(v)
+  if (!Number.isFinite(n)) return '—'
+  return Number.isInteger(n) ? String(n) : n.toFixed(1)
+}
+function pickerIndex(f: HalfField): number {
+  const raw = (draft as never as Record<string, unknown>)[f.key]
+  const v = typeof raw === 'number' ? raw : Number(raw)
+  if (!Number.isFinite(v)) return 0
+  return Math.min(f.options.length - 1, Math.max(0, Math.round((v - f.min) / 0.5)))
+}
+function onPick(f: HalfField, idx: number): void {
+  const v = f.min + idx * 0.5
+  ;(draft as never as Record<string, number>)[f.key] = Math.round(v * 10) / 10
+}
+/** 手输：容错处理，非法值不写入并提示 */
+function onType(f: HalfField, raw: string): void {
+  const v = Number(raw)
+  if (!Number.isFinite(v)) return
+  if (v < f.min || v > f.max) {
+    uni.showToast({ title: `${f.label}需在 ${f.min}–${f.max} 之间`, icon: 'none' })
+    return
+  }
+  // 对齐到 0.5
+  ;(draft as never as Record<string, number>)[f.key] = Math.round(v * 2) / 2
+}
+
 const today = new Date().toISOString().slice(0, 10)
 const cur = computed(() => steps[step.value - 1]!)
-const gate = computed(() => canAdvance(step.value, draft, MAX_BRANDS))
+const gate = computed(() => {
+  const base = canAdvance(step.value, draft, MAX_BRANDS)
+  if (!base.ok) return base
+  // 第 1 步的额外校验：手机号方式必须通过验证码
+  if (step.value === 1 && draft.loginMethod === 'phone' && !codeValid.value) {
+    return { ok: false, reason: codeSent.value ? '请输入 6 位验证码' : '请先获取验证码' }
+  }
+  return base
+})
 const age = computed(() => ageFromBirthday(draft.birthday))
 
 const methods = (['phone', 'wechat', 'qq', 'email'] as LoginMethod[]).map((id) => ({
@@ -183,9 +350,7 @@ const methods = (['phone', 'wechat', 'qq', 'email'] as LoginMethod[]).map((id) =
   hex: { phone: '#8fa3b0', wechat: '#5aa35a', qq: '#4a8fd0', email: '#c9a98a' }[id],
 }))
 
-const bodyFields = [
-  { key: 'heightCm', label: '身高', unit: 'cm', min: 145, max: 205 },
-  { key: 'weightKg', label: '体重', unit: 'kg', min: 35, max: 130 },
+const girthFields = [
   { key: 'chestCm', label: '胸围', unit: 'cm', min: 68, max: 130 },
   { key: 'waistCm', label: '腰围', unit: 'cm', min: 50, max: 130 },
   { key: 'hipCm', label: '臀围', unit: 'cm', min: 72, max: 140 },
@@ -217,7 +382,13 @@ onLoad((q) => {
       else if (k === 'brands') draft.brands = v.split('|')
       else if (k === 'gender') draft.gender = v === 'male' ? 'male' : 'female'
       else if (k === 'loginMethod') draft.loginMethod = v as never
-      else if (k in draft) (draft as never as Record<string, unknown>)[k] = v
+      else if (k in draft) {
+        // ⚠️ URL 参数一律是字符串，数值字段必须转成 number。
+        // 否则后面的 toFixed / 数值比较会在运行时抛
+        // 「a.toFixed is not a function」（自测抓到的真 bug）。
+        const num = Number(v)
+        ;(draft as never as Record<string, unknown>)[k] = Number.isFinite(num) && v.trim() !== '' ? num : v
+      }
     }
   }
   const st = Number(query?.step)
@@ -277,6 +448,7 @@ function finish(): void {
   const now = new Date().toISOString()
   const user: UserProfile = {
     code: nextUserCode(),
+    status: 'active',
     nickname: draft.nickname.trim(),
     gender: draft.gender!,
     birthday: draft.birthday,
@@ -311,6 +483,28 @@ function finish(): void {
 .odot { width: 28px; height: 28px; border-radius: 9px; }
 .olabel { flex: 1; font-size: 14px; }
 .ocheck { font-size: 15px; color: #1a1a1a; }
+.backline { margin-bottom: 12px; }
+.backline text { font-size: 12.5px; color: #6a6a6a; }
+.prow { display: flex; align-items: center; gap: 8px; background: #fff; border-radius: 11px; padding: 0 13px; height: 46px; }
+.pcc { font-size: 14px; color: #333; }
+.pinput { flex: 1; font-size: 15px; height: 46px; letter-spacing: 1.5px; }
+.err { display: block; font-size: 11px; color: #c0504d; margin-top: 7px; }
+.sendbtn { margin-top: 16px; height: 44px; border-radius: 11px; background: #1a1a1a; display: flex; align-items: center; justify-content: center; }
+.sendbtn.dis { background: #cfcfcf; }
+.sendbtn text { color: #fff; font-size: 14px; font-weight: 600; }
+.codeboxes { display: flex; gap: 9px; margin: 12px 0 6px; }
+.cbox { flex: 1; height: 56px; border-radius: 12px; background: #fff; border: 1.5px solid #e6e6e6; display: flex; align-items: center; justify-content: center; }
+.cbox.filled { border-color: #1a1a1a; }
+.cbox.cur { border-color: #1a1a1a; box-shadow: 0 0 0 3px rgba(26,26,26,.08); }
+.cdigit { font-size: 26px; font-weight: 800; color: #111; letter-spacing: 0; }
+.hiddeninput { position: absolute; left: -9999px; width: 1px; height: 1px; opacity: 0; }
+.resend { margin-top: 14px; }
+.resend text { font-size: 12.5px; color: #4a7fa5; }
+.pk { flex: 1; min-width: 0; }
+.pkbox { height: 40px; background: #fff; border-radius: 10px; display: flex; align-items: center; justify-content: center; gap: 6px; }
+.pkval { font-size: 15px; font-weight: 600; color: #111; }
+.pkarrow { font-size: 11px; color: #b0b0b0; }
+.tinynum { width: 62px; height: 40px; background: #fff; border-radius: 10px; text-align: center; font-size: 13px; flex-shrink: 0; }
 .warn { font-size: 10.5px; color: #b08040; margin-top: 6px; line-height: 16px; }
 .lab { font-size: 12px; font-weight: 600; color: #333; margin: 14px 0 8px; }
 .inp { height: 44px; background: #fff; border-radius: 11px; padding: 0 13px; font-size: 14px; }

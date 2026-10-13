@@ -10,7 +10,7 @@ import { reactive } from 'vue'
 import {
   createBodyState, deriveProfile, defaultBodyProfile, mockWardrobe,
   formatUserCode, DEFAULT_PRIVACY,
-  type BodyState, type Gender, type UserProfile, type WardrobeItem,
+  type Address, type BodyState, type Gender, type UserProfile, type WardrobeItem,
 } from '@cda/core'
 
 let seq = 0
@@ -36,6 +36,8 @@ export const store = reactive({
    * 注册流程走完第 6 步后写入，并落盘。
    */
   user: null as UserProfile | null,
+  /** 收货地址（P0：开源商城系统全都有，我们此前缺失） */
+  addresses: [] as Address[],
   /**
    * 从「穿搭建议」页点「在 3D 人偶上试穿」时写入，
    * 3D 试穿台 onShow 时读取并清空 —— 这是 uni-app 下最省事的跨页传参方式。
@@ -122,6 +124,57 @@ export function restoreUser(): void {
   } catch {
     // 解析失败当作未登录
   }
+}
+
+// ── 收货地址 ──
+const ADDR_KEY = 'cda.addresses.v1'
+
+function persistAddresses(): void {
+  try {
+    uni.setStorageSync(ADDR_KEY, JSON.stringify(store.addresses))
+  } catch {
+    /* 存储不可用时静默降级 */
+  }
+}
+
+export function restoreAddresses(): void {
+  try {
+    const raw = uni.getStorageSync(ADDR_KEY)
+    if (raw) store.addresses = JSON.parse(raw as string) as Address[]
+  } catch {
+    /* 忽略 */
+  }
+}
+
+/** 新增或更新地址；设为默认时自动取消其它默认 */
+export function upsertAddress(a: Address): void {
+  const i = store.addresses.findIndex((x) => x.id === a.id)
+  if (a.isDefault) store.addresses.forEach((x) => (x.isDefault = false))
+  if (i >= 0) store.addresses.splice(i, 1, a)
+  else store.addresses.push(a)
+  // 若一个默认都没有，把第一条设为默认
+  if (!store.addresses.some((x) => x.isDefault) && store.addresses.length) {
+    store.addresses[0]!.isDefault = true
+  }
+  persistAddresses()
+}
+
+export function removeAddress(id: string): void {
+  const i = store.addresses.findIndex((x) => x.id === id)
+  if (i < 0) return
+  const wasDefault = store.addresses[i]!.isDefault
+  store.addresses.splice(i, 1)
+  if (wasDefault && store.addresses.length) store.addresses[0]!.isDefault = true
+  persistAddresses()
+}
+
+export function setDefaultAddress(id: string): void {
+  store.addresses.forEach((x) => (x.isDefault = x.id === id))
+  persistAddresses()
+}
+
+export function defaultAddress(): Address | undefined {
+  return store.addresses.find((a) => a.isDefault) ?? store.addresses[0]
 }
 
 export function logout(): void {

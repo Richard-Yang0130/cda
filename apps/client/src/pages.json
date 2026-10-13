@@ -17,6 +17,10 @@
       "style": { "navigationStyle": "custom" }
     },
     {
+      "path": "pages/address/address",
+      "style": { "navigationBarTitleText": "收货地址" }
+    },
+    {
       "path": "pages/settings/settings",
       "style": { "navigationBarTitleText": "设置" }
     },

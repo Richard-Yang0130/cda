@@ -49,6 +49,12 @@
       </view>
     </view>
 
+    <view class="settings-entry" @click="goAddress">
+      <text class="set-t">收货地址</text>
+      <text class="set-s">{{ store.addresses.length ? store.addresses.length + ' 个地址' : '还没有收货地址' }}</text>
+      <text class="arrow">›</text>
+    </view>
+
     <view class="settings-entry" @click="goSettings">
       <text class="set-t">设置</text>
       <text class="set-s">隐私 · 账号 · 通知 · 关于</text>
@@ -146,6 +152,10 @@ const mine = computed(() => [
 
 function openMine(key: string): void {
   uni.showToast({ title: `${key === 'fav' ? '收藏' : key === 'follow' ? '关注' : '浏览历史'}（演示数据）`, icon: 'none' })
+}
+
+function goAddress(): void {
+  uni.navigateTo({ url: '/pages/address/address' })
 }
 
 function goSettings(): void {

@@ -35,9 +35,18 @@ export const DEFAULT_PRIVACY: PrivacySettings = {
   allowStrangerMessage: true,
 }
 
+/**
+ * 账号状态。
+ * 依据开源商城系统分析：五个项目**全都有**状态字段；
+ * 注销流程尤其需要「注销中」这个中间态（冷静期后可恢复）。
+ */
+export type UserStatus = 'active' | 'disabled' | 'deleting'
+
 export interface UserProfile {
   /** 用户码，形如 CDA_00000001 */
   code: string
+  /** 账号状态 */
+  status: UserStatus
   nickname: string
   gender: Gender
   /** 生日 ISO 日期（YYYY-MM-DD）；年龄由它实时算出，不单独存 */

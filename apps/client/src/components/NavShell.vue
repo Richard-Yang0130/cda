@@ -36,7 +36,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { onMounted, ref } from 'vue'
+import { store, restoreUser, restoreAddresses } from '@/store/app-store'
 
 /**
  * 响应式导航外壳。
@@ -61,6 +62,20 @@ const items = [
   { label: '我的衣橱', short: '衣橱', url: '/pages/wardrobe/wardrobe' },
   { label: '个人主页', short: '我的', url: '/pages/profile/profile' },
 ]
+
+/*
+ * 鉴权守卫：未注册/未登录**不得进入主功能**，直接引导到注册。
+ *
+ * 放在 NavShell 而不是各页面，是因为主页面都用了这个外壳 ——
+ * 一处拦截即全覆盖，新增页面也不会漏。
+ */
+onMounted(() => {
+  restoreUser()
+  restoreAddresses()
+  if (!store.user) {
+    uni.reLaunch({ url: '/pages/register/register' })
+  }
+})
 
 function go(url: string): void {
   if (url === current.value) return
