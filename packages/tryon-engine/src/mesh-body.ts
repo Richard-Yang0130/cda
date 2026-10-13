@@ -339,8 +339,19 @@ export class MeshBody implements BodySurface {
     const tRaw = proj / Math.max(seg.refLen, 1e-6)
     const t = Math.min(1, Math.max(0, tRaw))
     const perp = rel.clone().addScaledVector(seg.refDir, -proj)
-    const idx = Math.round(t * (seg.refR.length - 1))
-    const r = seg.refR[idx] || 1e-4
+    /*
+     * ⚠️ refR 必须**线性插值**，不能取最近桶。
+     *
+     * refR 是 14 个桶的采样，桶内取常数时会在桶边界上跳变；
+     * 而 score = perp/refR 是段归属权重的依据，
+     * score 一跳，权重就跳，表面随之出现不连续。
+     * 这是「每一处段边界都可能有离散跳变」的一个隐蔽来源。
+     */
+    const fi = t * (seg.refR.length - 1)
+    const i0 = Math.min(seg.refR.length - 1, Math.max(0, Math.floor(fi)))
+    const i1 = Math.min(seg.refR.length - 1, i0 + 1)
+    const fr = fi - i0
+    const r = (seg.refR[i0]! * (1 - fr) + seg.refR[i1]! * fr) || 1e-4
     return { score: perp.length() / Math.max(r, 1e-4), t, tRaw, perp }
   }
 
@@ -598,51 +609,66 @@ export class MeshBody implements BodySurface {
        * 向量相加会互相抵消变短，表面被拉向内侧 —— 这就是模型上那些**凹陷**
        * 的来源，也是线性混合蒙皮的老问题。混合标量保证位移严格沿径向。
        */
-      let bestK = 0
-      let bestW = -1
-      for (let k = 0; k < wSum.length; k++) {
-        if (wSum[k]! > bestW) { bestW = wSum[k]!; bestK = k }
-      }
-      let gBlend = 0
-      for (let k = 0; k < scored.length; k++) {
-        gBlend += gainOf(scored[k]!.seg.name, scored[k]!.s.t) * (wSum[k]! / total)
-      }
-      const dom = scored[bestK]!
       /*
-       * 方向调制：把径向位移乘上沉积权重，再按整圈均值归一化。
+       * ── 位置重建必须**混合**，且只混合相邻段 ──
        *
-       * 归一化是必须的 —— 否则各方向鼓得不一样，实际周长就不再等于
-       * 用户设定的围度。除以均值后，「肉加在该加的地方」与
-       * 「总周长符合测量」两件事同时成立。
+       * 只用「最优段」重建会让相邻顶点从不同轴心重建，位置突然跳开，
+       * 边被拉伸几十倍、表面长出尖刺。审计脚本实测：
+       *   male 身高min 最大拉伸 33.0×、异常边 82
+       *   male calfCm=min 15.1×、异常边 678 —— 几乎每个用例都有几百条坏边。
+       *
+       * 但也不能让所有段都参与混合：曾经这样做出过「揉成一团」，
+       * 因为躯干顶点会被腿段的远轴心拽走。
+       * 正确做法：**只让 score 与最优值可比的段参与**（轴心彼此相邻），
+       * 权重按 1/score^p 分配，远端段直接排除。
        */
-      const domY = LEVELS.crotch + dom.s.t * (LEVELS.shoulder + 0.03 - LEVELS.crotch)
-      const dep = depositOf(dom.seg.name, dom.s.t, domY)
-      let mod = 1
-      if (dep) {
-        const plen = dom.s.perp.length()
-        if (plen > 1e-9) {
-          // 截面局部坐标系：dir 为轴，fwd 为身前方向，side 为身体右侧
-          const axis = dom.seg.dir
+      let bestScore = Infinity
+      for (const sc of scored) if (sc.s.score < bestScore) bestScore = sc.s.score
+
+      const px = new THREE.Vector3()
+      const accP = new THREE.Vector3()
+      let wSum2 = 0
+      for (let k = 0; k < scored.length; k++) {
+        const { seg, s: sc } = scored[k]!
+        /*
+         * 参与权重必须是**平滑**衰减的，不能用硬阈值。
+         * 阈值一硬，参与混合的段集合就会突变，那本身就是一处离散跳变
+         * （审计里表现为骨骼参数一动就出现局部离群）。
+         */
+        const scRatio = sc.score / Math.max(bestScore, 1e-6)
+        if (scRatio > 2.6) continue
+        const fade = 1 - (() => {
+          const t2 = Math.min(1, Math.max(0, (scRatio - 1.4) / 1.2))
+          return t2 * t2 * (3 - 2 * t2)
+        })()
+        const g = gainOf(seg.name, sc.t)
+        const dep = depositOf(seg.name, sc.t, LEVELS.crotch + sc.t * (LEVELS.shoulder + 0.03 - LEVELS.crotch))
+        let mod = 1
+        const plen = sc.perp.length()
+        if (dep && plen > 1e-9) {
+          const axis = seg.refDir
           const zRef = new THREE.Vector3(0, 0, 1)
           const fwd = zRef.clone().addScaledVector(axis, -zRef.dot(axis))
           if (fwd.lengthSq() < 1e-6) fwd.set(1, 0, 0)
           fwd.normalize()
           const sideV = new THREE.Vector3().crossVectors(axis, fwd).normalize()
-          const nz = dom.s.perp.dot(fwd) / plen
-          const nx = dom.s.perp.dot(sideV) / plen
+          const nz = sc.perp.dot(fwd) / plen
+          const nx = sc.perp.dot(sideV) / plen
           const mean = depositMean(dep)
           mod = mean > 1e-6 ? depositWeight(dep, nx, nz) / mean : 1
         }
+        // 从该段的目标轴重建位置
+        px.copy(seg.a).addScaledVector(seg.dir, sc.tRaw * seg.len)
+        px.addScaledVector(sc.perp, 1 + (g - 1) * mod)
+        const w = (1 / (Math.pow(sc.score, 5) + 1e-3)) * fade
+        accP.addScaledVector(px, w)
+        wSum2 += w
       }
-      // 从**目标轴**重建位置：轴心按段内参数 t 沿目标轴走，
-      // 垂距按增益与沉积方向缩放。
-      // 这样骨骼参数一变（例如小臂拉长），手腕与手会跟着外移。
-      const axisPoint = dom.seg.a.clone().addScaledVector(dom.seg.dir, dom.s.tRaw * dom.seg.len)
-      const p = dom.s.perp.clone().multiplyScalar(1 + (gBlend - 1) * mod)
-      axisPoint.add(p)
-      arr[i] = axisPoint.x * heightM
-      arr[i + 1] = axisPoint.y * heightM
-      arr[i + 2] = axisPoint.z * heightM
+      if (wSum2 > 0) accP.divideScalar(wSum2)
+      else accP.copy(v)
+      arr[i] = accP.x * heightM
+      arr[i + 1] = accP.y * heightM
+      arr[i + 2] = accP.z * heightM
     }
 
     pos.needsUpdate = true
@@ -663,6 +689,23 @@ export class MeshBody implements BodySurface {
       }
     }
     return best
+  }
+
+  /** 从 OBJ 文本构建（审计脚本在 Node 里用，避免依赖 fetch 与浏览器） */
+  static loadFromText(text: string, profile: BodyProfile, gender: 'male' | 'female'): MeshBody {
+    const obj = new OBJLoader().parse(text)
+    return new MeshBody(obj, profile, { url: '(inline)', gender })
+  }
+
+  /** 变形后的顶点坐标（审计脚本用来做几何检测） */
+  getPositions(): Float32Array {
+    const pos = this.geo.getAttribute('position') as THREE.BufferAttribute
+    return pos.array as Float32Array
+  }
+
+  /** 未经任何变形的参考顶点（归一化单位） */
+  getReference(): Float32Array {
+    return this.base
   }
 
   get currentProfile(): BodyProfile {
