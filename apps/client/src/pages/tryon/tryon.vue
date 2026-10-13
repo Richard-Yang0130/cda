@@ -1,8 +1,8 @@
 <template>
+  <NavShell current="/pages/tryon/tryon">
   <view class="page">
     <!-- 顶部 -->
     <view class="nav">
-      <view class="nav-back" @click="goBack"><text>‹ 返回</text></view>
       <text class="nav-title">2D AI 试穿</text>
       <view class="nav-back placeholder" />
     </view>
@@ -104,9 +104,11 @@
       <text>接口层已按真实 API 形状定义，配置 VITE_FAL_API_KEY 后自动切换为真实推理</text>
     </view>
   </view>
+  </NavShell>
 </template>
 
 <script setup lang="ts">
+import NavShell from '@/components/NavShell.vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import {
   mockProducts,

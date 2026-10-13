@@ -1,7 +1,7 @@
 <template>
+  <NavShell current="/pages/wardrobe/wardrobe">
   <view class="page">
     <view class="nav">
-      <view class="nav-back" @click="goBack"><text>‹ 返回</text></view>
       <text class="nav-title">我的衣橱</text>
       <view class="nav-back placeholder" />
     </view>
@@ -67,9 +67,11 @@
       <text>当前数据仅存在内存中，刷新页面会重置（demo 阶段未接后端）</text>
     </view>
   </view>
+  </NavShell>
 </template>
 
 <script setup lang="ts">
+import NavShell from '@/components/NavShell.vue'
 import { computed } from 'vue'
 import {
   mockProducts,

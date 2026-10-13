@@ -1,7 +1,7 @@
 <template>
+  <NavShell current="/pages/outfit/outfit">
   <view class="page">
     <view class="nav">
-      <view class="nav-back" @click="goBack"><text>‹ 返回</text></view>
       <text class="nav-title">穿搭建议</text>
       <view class="nav-back placeholder" />
     </view>
@@ -51,9 +51,11 @@
       <text>建议由可解释的规则引擎生成（色彩和谐度 62% + 完整度 24% + 层次 14%），非深度学习模型</text>
     </view>
   </view>
+  </NavShell>
 </template>
 
 <script setup lang="ts">
+import NavShell from '@/components/NavShell.vue'
 import { computed, ref } from 'vue'
 import {
   mockProducts,

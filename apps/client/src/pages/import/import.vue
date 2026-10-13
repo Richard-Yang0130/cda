@@ -1,7 +1,7 @@
 <template>
+  <NavShell current="/pages/import/import">
   <view class="page">
     <view class="nav">
-      <view class="nav-back" @click="goBack"><text>‹ 返回</text></view>
       <text class="nav-title">拍照导入单品</text>
       <view class="nav-back placeholder" />
     </view>
@@ -81,9 +81,11 @@
       <text>真实链路精度预期：类目 >90%、颜色 >85%、同款 Top-10 命中 50–70%</text>
     </view>
   </view>
+  </NavShell>
 </template>
 
 <script setup lang="ts">
+import NavShell from '@/components/NavShell.vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import {
   mockProducts,

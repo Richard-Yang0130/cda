@@ -1,4 +1,5 @@
 <template>
+  <NavShell current="/pages/profile/profile">
   <view class="page">
     <view class="hero">
       <view class="avatar"><text>搭</text></view>
@@ -32,9 +33,11 @@
       </view>
     </view>
   </view>
+  </NavShell>
 </template>
 
 <script setup lang="ts">
+import NavShell from '@/components/NavShell.vue'
 import { computed } from 'vue'
 import { deriveProfile } from '@cda/core'
 import { store, restoreBodyState } from '@/store/app-store'

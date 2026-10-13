@@ -1,4 +1,5 @@
 <template>
+  <NavShell current="/pages/index/index">
   <view
     class="page"
     @touchmove="onDragMove"
@@ -136,9 +137,11 @@
       <text>{{ draggingTitle }}</text>
     </view>
   </view>
+  </NavShell>
 </template>
 
 <script setup lang="ts">
+import NavShell from '@/components/NavShell.vue'
 import { onBeforeUnmount, onMounted, nextTick, ref, reactive, computed } from 'vue'
 import { onShow } from '@dcloudio/uni-app'
 import {
