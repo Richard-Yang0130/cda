@@ -1,8 +1,12 @@
 {
     "pages": [
     {
-      "path": "pages/index/index",
+      "path": "pages/home/home",
       "style": { "navigationBarTitleText": "搭 · CDA" }
+    },
+    {
+      "path": "pages/index/index",
+      "style": { "navigationBarTitleText": "3D 试穿" }
     },
     {
       "path": "pages/persona/persona",
