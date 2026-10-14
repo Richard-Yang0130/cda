@@ -1,90 +1,139 @@
 {
     "pages": [
-    {
-      "path": "pages/admin/login",
-      "style": { "navigationStyle": "custom" }
-    },
-    {
-      "path": "pages/admin/dashboard",
-      "style": { "navigationStyle": "custom" }
-    },
-    {
-      "path": "pages/admin/invites",
-      "style": { "navigationStyle": "custom" }
-    },
-    {
-      "path": "pages/admin/users",
-      "style": { "navigationStyle": "custom" }
-    },
-    {
-      "path": "pages/admin/logs",
-      "style": { "navigationStyle": "custom" }
-    },
-    {
-      "path": "pages/home/home",
-      "style": { "navigationStyle": "custom", "navigationBarTitleText": "搭 · CDA" }
-    },
-    {
-      "path": "pages/index/index",
-      "style": { "navigationStyle": "custom", "navigationBarTitleText": "3D 试穿" }
-    },
-    {
-      "path": "pages/register/register",
-      "style": { "navigationStyle": "custom" }
-    },
-    {
-      "path": "pages/messages/messages",
-      "style": { "navigationStyle": "custom" }
-    },
-    {
-      "path": "pages/user/user",
-      "style": { "navigationBarTitleText": "用户主页" }
-    },
-    {
-      "path": "pages/address/address",
-      "style": { "navigationBarTitleText": "收货地址" }
-    },
-    {
-      "path": "pages/settings/settings",
-      "style": { "navigationBarTitleText": "设置" }
-    },
-    {
-      "path": "pages/pay/pay",
-      "style": { "navigationBarTitleText": "确认支付" }
-    },
-    {
-      "path": "pages/publish/publish",
-      "style": { "navigationStyle": "custom" }
-    },
-    {
-      "path": "pages/post/post",
-      "style": { "navigationStyle": "custom" }
-    },
-    {
-      "path": "pages/persona/persona",
-      "style": { "navigationBarTitleText": "我的人偶" }
-    },
-    {
-      "path": "pages/profile/profile",
-      "style": { "navigationStyle": "custom", "navigationBarTitleText": "个人主页" }
-    },
-    {
-      "path": "pages/tryon/tryon",
-      "style": { "navigationStyle": "custom", "navigationBarTitleText": "2D AI 试穿" }
-    },
-    {
-      "path": "pages/wardrobe/wardrobe",
-      "style": { "navigationStyle": "custom", "navigationBarTitleText": "我的衣橱" }
-    },
-    {
-      "path": "pages/import/import",
-      "style": { "navigationStyle": "custom", "navigationBarTitleText": "拍照导入单品" }
-    },
-    {
-      "path": "pages/outfit/outfit",
-      "style": { "navigationStyle": "custom", "navigationBarTitleText": "穿搭建议" }
+  {
+    "path": "pages/home/home",
+    "style": {
+      "navigationStyle": "custom",
+      "navigationBarTitleText": "搭 · CDA"
     }
-  ],
+  },
+  {
+    "path": "pages/index/index",
+    "style": {
+      "navigationStyle": "custom",
+      "navigationBarTitleText": "3D 试穿"
+    }
+  },
+  {
+    "path": "pages/register/register",
+    "style": {
+      "navigationStyle": "custom"
+    }
+  },
+  {
+    "path": "pages/messages/messages",
+    "style": {
+      "navigationStyle": "custom"
+    }
+  },
+  {
+    "path": "pages/user/user",
+    "style": {
+      "navigationBarTitleText": "用户主页"
+    }
+  },
+  {
+    "path": "pages/address/address",
+    "style": {
+      "navigationBarTitleText": "收货地址"
+    }
+  },
+  {
+    "path": "pages/settings/settings",
+    "style": {
+      "navigationBarTitleText": "设置"
+    }
+  },
+  {
+    "path": "pages/pay/pay",
+    "style": {
+      "navigationBarTitleText": "确认支付"
+    }
+  },
+  {
+    "path": "pages/publish/publish",
+    "style": {
+      "navigationStyle": "custom"
+    }
+  },
+  {
+    "path": "pages/post/post",
+    "style": {
+      "navigationStyle": "custom"
+    }
+  },
+  {
+    "path": "pages/persona/persona",
+    "style": {
+      "navigationBarTitleText": "我的人偶"
+    }
+  },
+  {
+    "path": "pages/profile/profile",
+    "style": {
+      "navigationStyle": "custom",
+      "navigationBarTitleText": "个人主页"
+    }
+  },
+  {
+    "path": "pages/tryon/tryon",
+    "style": {
+      "navigationStyle": "custom",
+      "navigationBarTitleText": "2D AI 试穿"
+    }
+  },
+  {
+    "path": "pages/wardrobe/wardrobe",
+    "style": {
+      "navigationStyle": "custom",
+      "navigationBarTitleText": "我的衣橱"
+    }
+  },
+  {
+    "path": "pages/import/import",
+    "style": {
+      "navigationStyle": "custom",
+      "navigationBarTitleText": "拍照导入单品"
+    }
+  },
+  {
+    "path": "pages/outfit/outfit",
+    "style": {
+      "navigationStyle": "custom",
+      "navigationBarTitleText": "穿搭建议"
+    }
+  },
+  {
+    "path": "pages/admin/login",
+    "style": {
+      "navigationStyle": "custom"
+    }
+  },
+  {
+    "path": "pages/admin/dashboard",
+    "style": {
+      "navigationStyle": "custom"
+    }
+  },
+  {
+    "path": "pages/admin/invites",
+    "style": {
+      "navigationStyle": "custom"
+    }
+  },
+  {
+    "path": "pages/admin/users",
+    "style": {
+      "navigationStyle": "custom"
+    }
+  },
+  {
+    "path": "pages/admin/logs",
+    "style": {
+      "navigationStyle": "custom"
+    }
+  }
+],
   "globalStyle": {
     "navigationBarTextStyle": "black",
     "navigationBarTitleText": "搭 · CDA",

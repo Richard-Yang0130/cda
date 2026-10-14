@@ -63,6 +63,14 @@ export interface UserProfile {
   privacy: PrivacySettings
   /** 国家与地区 */
   region: string
+  /** 注册时填的身型。个人主页与 3D 人偶都用它，而不是本地编辑状态 */
+  body?: {
+    heightCm: number
+    weightKg: number
+    chestCm: number
+    waistCm: number
+    hipCm: number
+  }
   /** 上次在线时间（ISO）；配合 isOnline 展示在线状态 */
   lastSeenAt: string
   isOnline: boolean

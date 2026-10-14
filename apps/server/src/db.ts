@@ -279,6 +279,22 @@ const MIGRATIONS: Migration[] = [
       `)
     },
   },
+  {
+    version: 3,
+    desc: '用户身型数据：注册时填的身高体重三围此前没有落库',
+    up: (db) => {
+      // 原先注册只提交了昵称/性别/生日/头像/风格/品牌，
+      // 身高体重三围**留在前端本地**，所以换设备或个人主页显示的是
+      // 本地默认值（女 158），而不是用户注册时填的。
+      db.exec(`
+        ALTER TABLE users ADD COLUMN height_cm REAL NOT NULL DEFAULT 0;
+        ALTER TABLE users ADD COLUMN weight_kg REAL NOT NULL DEFAULT 0;
+        ALTER TABLE users ADD COLUMN chest_cm  REAL NOT NULL DEFAULT 0;
+        ALTER TABLE users ADD COLUMN waist_cm  REAL NOT NULL DEFAULT 0;
+        ALTER TABLE users ADD COLUMN hip_cm    REAL NOT NULL DEFAULT 0;
+      `)
+    },
+  },
 ]
 
 export function openDb(path: string): DB {

@@ -578,6 +578,12 @@ async function finish(): Promise<void> {
       avatarHex: draft.avatarHex,
       styles: draft.styles,
       brands: draft.brands,
+      // 身型此前漏传了，导致个人主页显示的是本地默认值而不是用户填的
+      heightCm: draft.heightCm,
+      weightKg: draft.weightKg,
+      chestCm: draft.chestCm,
+      waistCm: draft.waistCm,
+      hipCm: draft.hipCm,
       region: '中国',
     })
     setToken(res.token)

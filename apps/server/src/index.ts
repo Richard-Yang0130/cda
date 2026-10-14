@@ -173,6 +173,11 @@ function toUser(u: any, opts: { self?: boolean } = {}): any {
     isOnline: opts.self ? true : !hide && !!u.is_online,
     lastSeenAt: opts.self || !hide ? u.last_seen_at : '',
     createdAt: u.created_at,
+    // 身型：注册时填的，个人主页与 3D 人偶都该用它
+    body: {
+      heightCm: u.height_cm ?? 0, weightKg: u.weight_kg ?? 0,
+      chestCm: u.chest_cm ?? 0, waistCm: u.waist_cm ?? 0, hipCm: u.hip_cm ?? 0,
+    },
     ...(opts.self ? { phone: u.phone ?? '', email: u.email ?? '' } : {}),
   }
 }
@@ -234,12 +239,16 @@ route('POST', '/api/auth/register', false, (req, res) => {
   const { hash, salt } = hashPassword(String(b.password))
   db.prepare(`INSERT INTO users
     (code, seq, phone, email, password_hash, password_salt, nickname, gender, birthday,
-     avatar_hex, region, privacy, last_seen_at, is_online, created_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+     avatar_hex, region, privacy, height_cm, weight_kg, chest_cm, waist_cm, hip_cm,
+     last_seen_at, is_online, created_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
     code, seq, b.phone ?? null, b.email ?? null, hash, salt,
     String(b.nickname), b.gender ?? 'female', b.birthday ?? '',
     b.avatarHex ?? '#c9b8a8',
-    b.region ?? '中国', JSON.stringify(b.privacy ?? {}), nowIso(), 1, nowIso(),
+    b.region ?? '中国', JSON.stringify(b.privacy ?? {}),
+    Number(b.heightCm) || 0, Number(b.weightKg) || 0,
+    Number(b.chestCm) || 0, Number(b.waistCm) || 0, Number(b.hipCm) || 0,
+    nowIso(), 1, nowIso(),
   )
   setStyles(code, Array.isArray(b.styles) ? b.styles : [])
   setBrands(code, Array.isArray(b.brands) ? b.brands : [])

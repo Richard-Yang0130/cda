@@ -142,8 +142,22 @@ const regionLabel = computed(() =>
 function goRegister(): void {
   uni.navigateTo({ url: '/pages/register/register' })
 }
-const genderLabel = computed(() => (store.bodyState.gender === 'male' ? '男性' : '女性'))
-const heightLabel = computed(() => `${store.bodyState.heightCm}cm`)
+/**
+ * 展示性别与身高。
+ *
+ * ⚠️ **优先用注册时填的信息**（store.user.body），
+ * 而不是本地 bodyState —— 后者是 3D 人偶的编辑状态，
+ * 没登录或换设备时会回落到默认值，于是显示成「女 158」，
+ * 与用户实际填的完全不符。
+ */
+const genderLabel = computed(() => {
+  const g = store.user?.gender ?? store.bodyState.gender
+  return g === 'male' ? '男' : '女'
+})
+const heightLabel = computed(() => {
+  const h = store.user?.body?.heightCm || store.bodyState.heightCm
+  return `${Number.isInteger(h) ? h : Number(h).toFixed(1)}cm`
+})
 
 /**
  * 我的收藏 / 关注 / 浏览历史 —— 计数从后端拉。
