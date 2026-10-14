@@ -871,6 +871,18 @@ async function handleAdmin(req: Req, res: ServerResponse, pathname: string): Pro
     if (reason.length < 2) return fail(res, 400, '删除用户必须填写原因')
     const u = db.prepare('SELECT * FROM users WHERE code = ?').get(code) as any
     if (!u) return fail(res, 404, '用户不存在')
+    // ⚠️ 删除前先单独备份一次。
+    // 起因：曾误删过 3 个刚注册的用户，而当日备份还是几小时前的、
+    // WAL 也已 checkpoint，数据完全找不回来。这个代价不能再付第二次。
+    try {
+      const dir = process.env.CDA_BACKUP_DIR ?? join(dirname(process.env.CDA_DB ?? './data/cda.db'), 'backups')
+      mkdirSync(dir, { recursive: true })
+      const f = join(dir, `predelete-${code}-${Date.now()}.db`)
+      db.exec(`VACUUM INTO '${f}'`)
+      console.log(`[CDA] 删除用户前已备份：${f}`)
+    } catch (e) {
+      return fail(res, 500, `删除前的安全备份失败，已中止删除：${(e as Error).message}`)
+    }
     // 外键都是 ON DELETE CASCADE，删用户会连带清掉他的帖子/消息/地址等
     db.prepare('DELETE FROM users WHERE code = ?').run(code)
     audit(db, me, 'user.delete', code, `昵称 ${u.nickname}｜原因：${reason}`, ip)

@@ -263,6 +263,9 @@
       </view>
     </view>
     <text v-if="!gate.ok && gate.reason" class="gate">{{ gate.reason }}</text>
+    <!-- ⚠️ 不能写成 v-else-if：第 1 步未选方式时 gate 永远是 false，
+         那样这个入口永远不会显示（自测发现的）。 -->
+    <text v-if="step === 1" class="tologin" @click="goLogin">已有账号？去登录</text>
   </view>
 </template>
 
@@ -502,6 +505,10 @@ onLoad((q) => {
   const st = Number(query?.step)
   if (Number.isFinite(st) && st >= 1 && st <= steps.length) step.value = st
 })
+
+function goLogin(): void {
+  uni.reLaunch({ url: '/pages/login/login' })
+}
 
 function styleName(id: string): string {
   return findStyle(id)?.name ?? id
@@ -759,4 +766,5 @@ async function finish(): Promise<void> {
 .btn.ghost text { color: #555; }
 .btn text { color: #fff; font-size: 15px; font-weight: 600; }
 .gate { display: block; text-align: center; font-size: 10.5px; color: #b08040; padding-bottom: 14px; }
+.tologin { display: block; text-align: center; font-size: 12.5px; color: #4a7fa5; padding-bottom: 16px; }
 </style>

@@ -130,7 +130,7 @@ export interface RegisterStep {
 
 /** 6 步注册流程（P0-1） */
 export const REGISTER_STEPS: RegisterStep[] = [
-  { id: 1, title: '选择登录方式', hint: '用于创建账号与找回' },
+  { id: 1, title: '选择注册方式', hint: '手机号需验证码；其他方式演示环境直接跳过' },
   { id: 2, title: '昵称与性别', hint: '其他用户看到的就是这些' },
   { id: 3, title: '基础信息', hint: '生日与身型，用于尺码推荐' },
   { id: 4, title: '选择风格', hint: '可多选，用于推荐品牌与商品' },

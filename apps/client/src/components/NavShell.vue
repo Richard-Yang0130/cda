@@ -66,7 +66,7 @@ const items = [
 ]
 
 /*
- * 鉴权守卫：未注册/未登录**不得进入主功能**，直接引导到注册。
+ * 鉴权守卫：未登录**不得进入主功能**，引导到登录页（登录页可再去注册）。
  *
  * 放在 NavShell 而不是各页面，是因为主页面都用了这个外壳 ——
  * 一处拦截即全覆盖，新增页面也不会漏。
@@ -79,7 +79,9 @@ onMounted(() => {
   restoreUser()
   restoreAddresses()
   if (!store.user) {
-    uni.reLaunch({ url: '/pages/register/register' })
+    // 未登录先去**登录页**，而不是注册页 ——
+    // 老用户回访时被扔到注册流程是很糟的体验
+    uni.reLaunch({ url: '/pages/login/login' })
   }
 })
 

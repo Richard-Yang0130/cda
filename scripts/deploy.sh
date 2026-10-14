@@ -190,6 +190,9 @@ do_update() {
     "$ROOT/apps/server/src/" "$SSH_USER@$ip:$REMOTE_DIR/app/src/"
   rsync -az --delete -e "ssh ${SSH_OPTS[*]}" \
     "$ROOT/apps/client/dist/build/h5/" "$SSH_USER@$ip:$REMOTE_DIR/web/"
+  # 运维配置也要同步，否则改了备份脚本/定时器线上不会生效
+  rsync -az -e "ssh ${SSH_OPTS[*]}" "$ROOT/deploy/" "$SSH_USER@$ip:$REMOTE_DIR/deploy/"
+  ssh "${SSH_OPTS[@]}" "$SSH_USER@$ip" "sudo cp $REMOTE_DIR/deploy/backup.mjs /opt/cda/backup.mjs && sudo cp $REMOTE_DIR/deploy/cda-backup.timer /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl restart cda-backup.timer || true"
   ssh "${SSH_OPTS[@]}" "$SSH_USER@$ip" "sudo systemctl restart $SERVICE && sleep 2 && systemctl is-active $SERVICE"
   ok "已更新并重启（数据库未动）"
 }

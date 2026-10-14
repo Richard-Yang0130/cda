@@ -15,6 +15,12 @@
     }
   },
   {
+    "path": "pages/login/login",
+    "style": {
+      "navigationStyle": "custom"
+    }
+  },
+  {
     "path": "pages/register/register",
     "style": {
       "navigationStyle": "custom"
