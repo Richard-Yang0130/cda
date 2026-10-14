@@ -140,7 +140,9 @@ const regionLabel = computed(() =>
   !store.user || store.user.privacy.hideRegion ? '未公开' : store.user.region,
 )
 function goRegister(): void {
-  uni.navigateTo({ url: '/pages/register/register' })
+  // 未登录时主页面本会被守卫拦到登录页，这里是兜底；
+  // 同样指向登录页，由登录页再引导去注册
+  uni.navigateTo({ url: '/pages/login/login' })
 }
 /**
  * 展示性别与身高。

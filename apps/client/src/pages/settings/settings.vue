@@ -150,7 +150,9 @@ function confirmDelete(): void {
       if (!r.confirm) return
       logout()
       uni.showToast({ title: '已注销（演示）', icon: 'none' })
-      setTimeout(() => uni.reLaunch({ url: '/pages/register/register' }), 800)
+      // 注销后回**登录页**，而不是注册页 ——
+      // 用户注销后多半是想换个账号登录，直接塞进 6 步注册是错的
+      setTimeout(() => uni.reLaunch({ url: '/pages/login/login' }), 800)
     },
   })
 }
