@@ -28,7 +28,7 @@ const tap = async (l) => {
 const R=[]; const ck=(l,c)=>{R.push(c);console.log(`${c?'✅':'❌'} ${l}`)}
 const stepNow = async () => {
   const t = await txt()
-  return [1,2,3,4,5,6].find(n => t.includes(['','选择登录方式','昵称与性别','基础信息','选择风格','选择品牌','上传头像'][n])) ?? 0
+  return [1,2,3,4,5,6].find(n => t.includes(['','选择注册方式','昵称与性别','基础信息','选择风格','选择品牌','上传头像'][n])) ?? 0
 }
 
 // 从第 1 步开始，只预填生日（原生日期控件无法自动化）
@@ -107,8 +107,14 @@ ck('品牌计数变为 1/15', (await txt()).includes('1/15'))
 await tap('下一步')
 ck('第 5 步通过 → 第 6 步', (await stepNow()) === 6)
 
-// ── 第 6 步：完成 ──
-await tap('基础款棉质白衬衫').catch(()=>{}) // 随便点一个非交互元素，不影响
+// ── 第 6 步：密码 + 邀请码 + 完成 ──
+// ⚠️ 注册流程后来加了「设置密码」与「邀请码」两个必填项，
+// 这个用例当时没跟着改，所以一直失败 —— 是测试没跟上功能，不是功能坏了。
+const inputs6 = await p.$$('uni-input input')
+if (inputs6[0]) { await inputs6[0].focus(); await p.keyboard.type('pw123456', { delay: 25 }) }
+if (inputs6[1]) { await inputs6[1].focus(); await p.keyboard.type('CDA-BETA-01', { delay: 25 }) }
+await new Promise(r=>setTimeout(r,600))
+ck('第 6 步填入了密码与邀请码', inputs6.length >= 2, `找到 ${inputs6.length} 个输入框`)
 await tap('完成注册')
 await new Promise(r=>setTimeout(r,2600))
 const finalHash = await p.evaluate(() => location.hash)

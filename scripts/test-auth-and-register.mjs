@@ -25,6 +25,10 @@ const R = []; const ck = (l,c)=>{R.push(c);console.log(`${c?'✅':'❌'} ${l}`)}
 await p.goto(BASE + '/#/pages/home/home',{waitUntil:'networkidle2',timeout:60000})
 await new Promise(r=>setTimeout(r,3500))
 ck('未登录访问主页被引导到**登录页**', (await hash()).includes('login'))
+// ⚠️ 上面已经跳到了登录页，必须先导航到注册页再断言 ——
+// 否则断言的还是登录页的内容（这个用例因此一直失败）。
+await p.goto(BASE + '/#/pages/register/register',{waitUntil:'networkidle2',timeout:60000})
+await new Promise(r=>setTimeout(r,3000))
 ck('注册页显示第 1 步', (await txt()).includes('选择注册方式'))
 
 // ② 手机号方式 → 进入手机号输入
@@ -56,7 +60,14 @@ ck('合法手机号后进入验证码步骤', t4.includes('验证码已发送') 
 // ⑤ 0.5 精度：直接用 draft 参数落到第 3 步验证小数保留
 await p.goto(BASE + '/#/pages/register/register?step=3&draft=nickname:%E6%B5%8B,gender:female,birthday:1995-06-15,loginMethod:phone,heightCm:177.5,weightKg:62.5',
   {waitUntil:'networkidle2',timeout:60000})
-await new Promise(r=>setTimeout(r,3000))
+/*
+ * ⚠️ 必须先 reload。
+ * 上面已经在 register 页上，再跳到 register?step=3 是**同一个路由**，
+ * uni-app 不会重新挂载，onLoad 不会重跑，draft 参数等于没生效 ——
+ * 页面还停在第 2 步，所以断言 177.5 必然失败。
+ */
+await p.reload({waitUntil:'networkidle2'})
+await new Promise(r=>setTimeout(r,4500))
 const t5 = await txt()
 ck('第 3 步可承载 .5 身高（177.5 显示）', t5.includes('177.5'))
 ck('第 3 步可承载 .5 体重（62.5 显示）', t5.includes('62.5'))

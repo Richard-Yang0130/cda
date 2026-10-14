@@ -37,7 +37,7 @@ const nick = '端到端' + stamp.slice(-4)
 const p1 = await mk()
 await p1.goto(`${BASE}/#/pages/register/register`,{waitUntil:'networkidle2',timeout:60000})
 await new Promise(r=>setTimeout(r,3500))
-ck('打开注册页', (await txt(p1)).includes('选择登录方式'))
+ck('打开注册页', (await txt(p1)).includes('选择注册方式'))
 
 await tap(p1,'手机号'); await new Promise(r=>setTimeout(r,500))
 await typeIn(p1,'uni-input input', phone)

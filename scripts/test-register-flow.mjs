@@ -30,7 +30,7 @@ const tap = async (label) => {
 }
 const stepOf = async () => {
   const t = await text()
-  for (const [n, title] of [[1, '选择登录方式'], [2, '昵称与性别'], [3, '基础信息'], [4, '选择风格'], [5, '选择品牌'], [6, '上传头像']]) {
+  for (const [n, title] of [[1, '选择注册方式'], [2, '昵称与性别'], [3, '基础信息'], [4, '选择风格'], [5, '选择品牌'], [6, '上传头像']]) {
     if (t.includes(title)) return n
   }
   return 0
