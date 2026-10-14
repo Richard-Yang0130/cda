@@ -124,7 +124,7 @@ async function restartServer() {
        * 实际只是测试数据没对齐。
        */
       CDA_INVITES: [
-        ...Array.from({ length: 24 }, (_, i) => `CDA-BETA-${String(i + 1).padStart(2, '0')}`),
+        ...Array.from({ length: 32 }, (_, i) => `CDA-BETA-${String(i + 1).padStart(2, '0')}`),
         ...Array.from({ length: 8 }, (_, i) => `BETA-00${i + 1}`),
         ...Array.from({ length: 8 }, (_, i) => `E2E-00${i + 1}`),
       ].join(','),

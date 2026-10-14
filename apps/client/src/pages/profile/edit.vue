@@ -10,6 +10,7 @@
         <text class="ava-btn">{{ uploading ? '上传中…' : '更换头像' }}</text>
       </view>
 
+        <AvatarCropper :visible="cropping" :src="cropSrc" @cancel="cropping = false" @done="onCropped" />
       <!-- 基本资料 -->
       <text class="group">基本资料</text>
       <view class="card">
@@ -191,28 +192,37 @@ function toggleBrand(id: string): void {
  * 且不能直接 POST 文件；base64 是 H5 与小程序都通用的方式。
  * 选择了 compressed 尺寸，避免把几 MB 的原图传上来。
  */
+const cropping = ref(false)
+const cropSrc = ref('')
+
+/** 选图 → 剪裁 → 上传。剪裁后再传，避免把整张原图当头像 */
 function pickAvatar(): void {
   if (uploading.value) return
   uni.chooseImage({
     count: 1,
     sizeType: ['compressed'],
-    success: async (r) => {
+    success: (r) => {
       const path = (r.tempFilePaths as string[])[0]
       if (!path) return
-      uploading.value = true
-      try {
-        const dataUrl = await toDataUrl(path)
-        const res = await api.uploadAvatar(dataUrl)
-        form.avatarUrl = res.avatarUrl
-        applyServerUser(res.user)
-        uni.showToast({ title: '头像已更新', icon: 'none' })
-      } catch (e) {
-        uni.showModal({ title: '头像上传失败', content: errText(e), showCancel: false })
-      } finally {
-        uploading.value = false
-      }
+      cropSrc.value = path
+      cropping.value = true
     },
   })
+}
+
+async function onCropped(dataUrl: string): Promise<void> {
+  cropping.value = false
+  uploading.value = true
+  try {
+    const res = await api.uploadAvatar(dataUrl)
+    form.avatarUrl = res.avatarUrl
+    applyServerUser(res.user)
+    uni.showToast({ title: '头像已更新', icon: 'none' })
+  } catch (e) {
+    uni.showModal({ title: '头像上传失败', content: errText(e), showCancel: false })
+  } finally {
+    uploading.value = false
+  }
 }
 
 /** 把本地路径转成 data URL（H5 用 canvas；小程序端走 FileSystemManager） */

@@ -23,7 +23,30 @@ async function mkUser(n, i) {
 // ── ① 注册时可跳过：不传生日/身型/品牌也应成功 ──
 const A = await mkUser('跳过测试', 1)
 ck('★ 不填生日、身型、品牌也能注册成功', A.ok === true, A.user?.code)
-ck('跳过时身型为空（不报错）', A.user?.body?.heightCm === 0)
+/*
+ * ⚠️ 这条曾经是错的：注册草稿给了「典型值」当默认（165/55/86/68/92），
+ * 用户跳过时会把它们当成自己填的数据提交上去 —— 那是**伪造的用户数据**，
+ * 比空值有害得多（尺码推荐会基于假数据算）。
+ * 现在必须严格等于 0。
+ */
+ck('★ 跳过时身型为 0（空），而不是默认值', A.user?.body?.heightCm === 0,
+   `身高 ${A.user?.body?.heightCm} 体重 ${A.user?.body?.weightKg}`)
+ck('★ 三围也为 0（未伪造）', A.user?.body?.chestCm === 0 && A.user?.body?.waistCm === 0 && A.user?.body?.hipCm === 0,
+   `${A.user?.body?.chestCm}/${A.user?.body?.waistCm}/${A.user?.body?.hipCm}`)
+// ⚠️ 上面 mkUser 为了别的用例带了生日，所以这里**另造一个真正最小化的注册** ——
+// 「跳过」的意思是什么都不传，用一个带了值的用户去断言会得到假结果。
+const MIN = await api('POST','/api/auth/register',{body:{
+  inviteCode:'CDA-BETA-08', password:'pw123456', nickname:'最小注册',
+  phone:'131'+String(Date.now()).slice(-8),
+}})
+ck('★ 只传昵称/手机号/密码也能注册（真正的跳过）', MIN.data.ok === true, MIN.data.user?.code)
+ck('★ 未填生日时为空', MIN.data.user?.birthday === '', `"${MIN.data.user?.birthday}"`)
+ck('未填性别时有合理默认', ['male','female'].includes(MIN.data.user?.gender))
+ck('跳过时品牌为空数组', Array.isArray(A.user?.brands) && A.user.brands.length === 0)
+// 剪裁后的头像应是正方形（前端会输出 512x512）
+const SQ = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+const sq = await api('POST','/api/me/avatar',{token:A.token, body:{dataUrl:SQ}})
+ck('剪裁产物（正方形图）可正常上传', sq.data.ok === true)
 ck('跳过后可正常登录', (await api('POST','/api/auth/login',{body:{account:A.user.code,password:'pw123456'}})).data.ok === true)
 
 // ── ② 我的资料：补填身型 ──

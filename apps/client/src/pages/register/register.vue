@@ -148,7 +148,7 @@
               <input
                 class="ginput"
                 type="digit"
-                :value="String((draft as any)[f.key])"
+                :value="(draft as any)[f.key] ? String((draft as any)[f.key]) : ''"
                 @blur="(e: any) => onGirth(f, e.detail.value)"
               />
               <text class="gunit">cm</text>
@@ -229,6 +229,7 @@
           <text class="avahint">{{ avatarUrl ? '已选择，点击可换' : '点击从相册选择（可跳过，之后再设置）' }}</text>
         </view>
         <text class="lab">或选一个头像底色</text>
+        <AvatarCropper :visible="cropping" :src="cropSrc" @cancel="cropping = false" @done="onCropped" />
         <view class="avatars">
           <view
             v-for="c in avatarColors"
@@ -306,20 +307,26 @@ const avatarUrl = ref('')
 /** 注册时先选好图，最后一步再随注册一起传（避免还没账号就先上传） */
 const avatarDataUrl = ref('')
 
+const cropping = ref(false)
+const cropSrc = ref('')
+
+/** 选图后先进剪裁，用户确认了才用 */
 function pickAvatar(): void {
   uni.chooseImage({
     count: 1, sizeType: ['compressed'],
-    success: async (r) => {
+    success: (r) => {
       const path = (r.tempFilePaths as string[])[0]
       if (!path) return
-      try {
-        avatarDataUrl.value = await toDataUrl(path)
-        avatarUrl.value = avatarDataUrl.value
-      } catch {
-        uni.showToast({ title: '读取图片失败', icon: 'none' })
-      }
+      cropSrc.value = path
+      cropping.value = true
     },
   })
+}
+
+function onCropped(dataUrl: string): void {
+  cropping.value = false
+  avatarDataUrl.value = dataUrl
+  avatarUrl.value = dataUrl
 }
 
 /** 本地路径 → data URL（H5 用 canvas；小程序端走 FileSystemManager） */
@@ -413,13 +420,15 @@ const halfFields: HalfField[] = [
 function fmt(v: unknown): string {
   // 防御：状态里若混入字符串（URL 参数、手输中间态），不能让它把页面打崩
   const n = typeof v === 'number' ? v : Number(v)
-  if (!Number.isFinite(n)) return '—'
+  // 0 表示「未填写」—— 显示成占位而不是 0，否则用户以为自己填过
+  if (!Number.isFinite(n) || n === 0) return '未填'
   return Number.isInteger(n) ? String(n) : n.toFixed(1)
 }
 function pickerIndex(f: HalfField): number {
   const raw = (draft as never as Record<string, unknown>)[f.key]
   const v = typeof raw === 'number' ? raw : Number(raw)
-  if (!Number.isFinite(v)) return 0
+  // 未填写（0）时停在范围中间，避免一打开就停在最矮/最轻
+  if (!Number.isFinite(v) || v === 0) return Math.round((f.options.length - 1) / 2)
   return Math.min(f.options.length - 1, Math.max(0, Math.round((v - f.min) / 0.5)))
 }
 function onPick(f: HalfField, idx: number): void {
@@ -502,7 +511,13 @@ function girthRange(key: string): { min: number; max: number } {
 function onGirth(f: { key: string; label: string }, raw: string): void {
   const v = Number(raw)
   const { min, max } = girthRange(f.key)
-  if (raw.trim() === '' || !Number.isFinite(v)) {
+  // 留空 = 不填（这一步本就是选填），不算错误
+  if (raw.trim() === '') {
+    girthErr[f.key] = ''
+    ;(draft as never as Record<string, number>)[f.key] = 0
+    return
+  }
+  if (!Number.isFinite(v)) {
     girthErr[f.key] = '请输入数字'
     return
   }
@@ -606,6 +621,14 @@ function removeBrand(id: string): void {
  * 用户可能不想现在填，强留只会流失。之后可在「我的资料」补。
  */
 function skipStep(): void {
+  // 跳过时**清空**这一步的数据，而不是保留默认值 ——
+  // 否则会把「典型值」当成用户填的提交上去
+  if (step.value === 3) {
+    draft.birthday = ''
+    draft.heightCm = 0; draft.weightKg = 0
+    draft.chestCm = 0; draft.waistCm = 0; draft.hipCm = 0
+    for (const k of Object.keys(girthErr)) girthErr[k] = ''
+  }
   if (step.value === 5) draft.brands = []
   step.value++
 }

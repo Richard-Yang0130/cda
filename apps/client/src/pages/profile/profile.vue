@@ -352,6 +352,8 @@ restoreBodyState()
   width: 54px;
   height: 54px;
   border-radius: 16px;
+  /* ⚠️ 必须裁掉溢出 —— 否则上传的方形头像会从圆角外面露出来 */
+  overflow: hidden;
   background: #1a1a1a;
   display: flex;
   align-items: center;

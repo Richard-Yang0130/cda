@@ -160,11 +160,15 @@ export function emptyDraft(): RegisterDraft {
     nickname: '',
     gender: null,
     birthday: '',
-    heightCm: 165,
-    weightKg: 55,
-    chestCm: 86,
-    waistCm: 68,
-    hipCm: 92,
+    // ⚠️ 必须是 0（= 未填写），不能给「典型值」当默认。
+    // 给了默认值的话，用户跳过这一步时会把 165/55/86/68/92
+    // 当成他自己填的数据提交上去 —— 那是**伪造的用户数据**，
+    // 比空值有害得多（尺码推荐会基于假数据算）。
+    heightCm: 0,
+    weightKg: 0,
+    chestCm: 0,
+    waistCm: 0,
+    hipCm: 0,
     styles: [],
     brands: [],
     avatarHex: '#c9b8a8',
