@@ -137,6 +137,8 @@ export const api = {
   // 我
   me: () => request<{ user: any }>('/me'),
   updateMe: (b: Record<string, unknown>) => request<{ user: any }>('/me', { method: 'PATCH', body: b }),
+  uploadAvatar: (dataUrl: string) =>
+    request<{ avatarUrl: string; user: any }>('/me/avatar', { method: 'POST', body: { dataUrl }, timeout: 30000 }),
   myFollowing: () => request<{ users: any[] }>('/me/following'),
   myFavorites: () => request<{ posts: any[] }>('/me/favorites'),
   myHistory: () => request<{ posts: any[] }>('/me/history'),
@@ -150,8 +152,9 @@ export const api = {
   unblock: (code: string) => request(`/users/${code}/unblock`, { method: 'POST' }),
 
   // 帖子
-  posts: (limit = 20, offset = 0) =>
-    request<{ posts: any[]; hasMore: boolean; nextOffset: number | null }>(`/posts?limit=${limit}&offset=${offset}`),
+  posts: (limit = 20, offset = 0, kind = '') =>
+    request<{ posts: any[]; hasMore: boolean; nextOffset: number | null }>(
+      `/posts?limit=${limit}&offset=${offset}${kind ? `&kind=${kind}` : ''}`),
   post: (id: string) => request<{ post: any }>(`/posts/${id}`),
   createPost: (b: Record<string, unknown>) => request<{ post: any }>('/posts', { method: 'POST', body: b }),
   like: (id: string) => request<{ likes: number; liked: boolean }>(`/posts/${id}/like`, { method: 'POST' }),

@@ -11,7 +11,7 @@
  *   CDA_INVITES  初始邀请码，逗号分隔（仅首次运行时写入）
  */
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
-import { mkdirSync, readFileSync, existsSync, statSync } from 'node:fs'
+import { mkdirSync, readFileSync, existsSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join, normalize, extname } from 'node:path'
 import {
   openDb, hashPassword, verifyPassword, formatUserCode, nextUserSeq,
@@ -172,6 +172,7 @@ function toUser(u: any, opts: { self?: boolean } = {}): any {
     gender: u.gender,
     birthday: u.birthday,
     avatarHex: u.avatar_hex,
+    avatarUrl: u.avatar_url ?? '',
     styles: stylesOf(u.code),
     brands: brandsOf(u.code),
     status: u.status,
@@ -312,11 +313,61 @@ route('GET', '/api/me', true, (req, res) => {
   json(res, 200, { ok: true, user: toUser(u, { self: true }) })
 })
 
+/**
+ * 上传头像。
+ *
+ * 用 base64 data URL 传输（uni-app 的 chooseImage 在小程序端只能拿到临时路径，
+ * base64 是 H5 与小程序都通用的方式）。
+ *
+ * **存文件而不是把 base64 塞进数据库** ——
+ * 后者会让库迅速膨胀，且每次查用户都要读几十 KB 的无用数据。
+ */
+route('POST', '/api/me/avatar', true, (req, res) => {
+  const dataUrl = String(req.body?.dataUrl ?? '')
+  const m = dataUrl.match(/^data:image\/(png|jpeg|jpg|webp);base64,([A-Za-z0-9+/=]+)$/)
+  if (!m) return fail(res, 400, '图片格式不支持（仅 png/jpeg/webp）')
+  const buf = Buffer.from(m[2]!, 'base64')
+  // 限制 500KB：头像是小图，超过这个尺寸说明前端没压缩
+  if (buf.length > 500 * 1024) return fail(res, 400, '图片过大，请压缩后再上传（上限 500KB）')
+
+  const dir = join(dirname(process.env.CDA_DB ?? './data/cda.db'), 'avatars')
+  mkdirSync(dir, { recursive: true })
+  const ext = m[1] === 'jpg' ? 'jpeg' : m[1]!
+  const file = join(dir, `${req.code}.${ext}`)
+  writeFileSync(file, buf)
+
+  const url = `/api/avatar/${req.code}?v=${Date.now()}`
+  db.prepare('UPDATE users SET avatar_url = ? WHERE code = ?').run(url, req.code!)
+  const u = db.prepare('SELECT * FROM users WHERE code = ?').get(req.code!)
+  json(res, 200, { ok: true, avatarUrl: url, user: toUser(u, { self: true }) })
+})
+
+/** 取头像。不加鉴权 —— 头像是公开展示的，加鉴权反而让 <img> 用不了 */
+route('GET', '/api/avatar/:code', false, (req, res) => {
+  const dir = join(dirname(process.env.CDA_DB ?? './data/cda.db'), 'avatars')
+  for (const ext of ['png', 'jpeg', 'webp']) {
+    const f = join(dir, `${req.params.code}.${ext}`)
+    if (existsSync(f)) {
+      const buf = readFileSync(f)
+      res.writeHead(200, {
+        'content-type': `image/${ext}`,
+        'content-length': String(buf.length),
+        'cache-control': 'public, max-age=86400',
+      })
+      return res.end(buf)
+    }
+  }
+  fail(res, 404, '无头像')
+})
+
 route('PATCH', '/api/me', true, (req, res) => {
   const b = req.body ?? {}
   const map: Record<string, string> = {
     nickname: 'nickname', gender: 'gender', birthday: 'birthday', avatarHex: 'avatar_hex',
     region: 'region', status: 'status',
+    // 身型可在「我的资料」里补填 —— 注册时是选填的
+    heightCm: 'height_cm', weightKg: 'weight_kg',
+    chestCm: 'chest_cm', waistCm: 'waist_cm', hipCm: 'hip_cm',
   }
   const sets: string[] = []
   const vals: unknown[] = []
@@ -430,6 +481,7 @@ function toPost(p: any, likedByMe = false): any {
     likes: p.likes,
     comments: p.comment_count ?? 0,
     ratio: p.ratio,
+    kind: p.kind ?? 'outfit',
     linkedProductId: p.linked_product_id ?? undefined,
     createdAt: p.created_at,
     likedByMe,
@@ -438,12 +490,17 @@ function toPost(p: any, likedByMe = false): any {
 
 route('GET', '/api/posts', true, (req, res) => {
   const { limit, offset } = page(req)
+  // kind: outfit=穿搭 / idle=闲置；不传则全部
+  const kind = req.query.get('kind') ?? ''
+  const where = kind ? 'WHERE p.kind = ?' : ''
+  const args: unknown[] = kind ? [kind] : []
   // 评论数由评论表推导，不再依赖 posts 上那个没人维护的计数器
   const rows = db.prepare(`
     SELECT p.*, u.nickname AS author_nickname, u.avatar_hex AS author_avatar,
-           (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.id) AS comment_count
+           (SELECT COUNT(*) AS n FROM comments c WHERE c.post_id = p.id) AS comment_count
     FROM posts p JOIN users u ON u.code = p.author_code
-    ORDER BY p.created_at DESC LIMIT ? OFFSET ?`).all(limit + 1, offset) as any[]
+    ${where}
+    ORDER BY p.created_at DESC LIMIT ? OFFSET ?`).all(...(args as any[]), limit + 1, offset) as any[]
   const liked = new Set(
     (db.prepare('SELECT post_id FROM post_likes WHERE code = ?').all(req.code!) as any[]).map((r) => r.post_id),
   )
@@ -510,10 +567,12 @@ route('POST', '/api/posts', true, (req, res) => {
   const b = req.body ?? {}
   if (!String(b.title ?? '').trim()) return fail(res, 400, '请填写内容')
   const id = newId('post')
-  db.prepare(`INSERT INTO posts (id, author_code, title, cover_hex, tags, ratio, linked_product_id, created_at)
-    VALUES (?,?,?,?,?,?,?,?)`).run(
+  // kind 只允许两个值 —— 防止塞进任意字符串
+  const kind = b.kind === 'idle' ? 'idle' : 'outfit'
+  db.prepare(`INSERT INTO posts (id, author_code, title, cover_hex, tags, ratio, kind, linked_product_id, created_at)
+    VALUES (?,?,?,?,?,?,?,?,?)`).run(
     id, req.code!, String(b.title), b.coverHex ?? '#dddddd',
-    JSON.stringify(b.tags ?? []), Number(b.ratio) || 1, b.linkedProductId ?? null, nowIso(),
+    JSON.stringify(b.tags ?? []), Number(b.ratio) || 1, kind, b.linkedProductId ?? null, nowIso(),
   )
   const p = db.prepare('SELECT * FROM posts WHERE id = ?').get(id)
   json(res, 200, { ok: true, post: toPost(p) })

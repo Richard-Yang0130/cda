@@ -77,6 +77,8 @@ async function submit(): Promise<void> {
     await api.createPost({
       title: text.value.trim(),
       coverHex: palette[Math.floor(Math.random() * palette.length)],
+      // kind 决定它出现在哪个分栏下
+      kind: mode.value === 'sell' ? 'idle' : 'outfit',
       tags: mode.value === 'sell' ? ['闲置'] : ['穿搭'],
       ratio: 1 + Math.round(Math.random() * 4) / 10,
     })

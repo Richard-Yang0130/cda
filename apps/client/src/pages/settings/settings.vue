@@ -52,7 +52,7 @@
       <view class="card">
         <view class="srow tap" @click="about">
           <text class="st">关于搭 · CDA</text>
-          <text class="sv">v0.1.0 ›</text>
+          <text class="sv">v{{ version }} ›</text>
         </view>
         <view class="srow tap" @click="clearCache">
           <text class="st">清除本地缓存</text>
@@ -71,11 +71,12 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { createPaymentProvider, presenceText, type PrivacySettings } from '@cda/core'
+import { APP_VERSION, createPaymentProvider, presenceText, type PrivacySettings } from '@cda/core'
 import { store, commitUser, logout } from '@/store/app-store'
 
 const user = computed(() => store.user)
 const notify = ref(true)
+const version = APP_VERSION
 const pay = createPaymentProvider()
 
 /** 支付方式为 P0-2 要求的「预埋」项：入口在，但明确说明未开通 */
@@ -119,9 +120,20 @@ function payStub(): void {
 function about(): void {
   uni.showModal({
     title: '关于搭 · CDA',
-    content: '一个把「已有衣橱」放在第一位的购物与穿搭社区。\n版本 0.1.0（演示）',
+    content: `一个把「已有衣橱」放在第一位的购物与穿搭社区。
+
+开发：nationwildyounggay
+github.com/nationwildyounggay
+
+版本 ${APP_VERSION}`,
     showCancel: false,
   })
+  setTimeout(() => {
+    uni.setClipboardData({
+      data: 'https://github.com/nationwildyounggay',
+      success: () => uni.showToast({ title: '已复制 GitHub 地址', icon: 'none' }),
+    })
+  }, 300)
 }
 
 function clearCache(): void {

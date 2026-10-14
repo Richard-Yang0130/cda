@@ -108,7 +108,10 @@ const seed = async (p, token, user) => {
   const t = await txt(p)
   ck('版本变化后弹出更新说明', t.includes('这次更新了什么'))
   ck('弹窗显示了一个版本号', /\d+\.\d+\.\d+/.test(t))
-  ck('弹窗列出更新要点', /正式版发布|已部署到|账号数据/.test(t))
+  // ⚠️ 不要断言具体版本的文案 —— 每升一版这句就得改。
+  // 改为断言「列出了一批要点」，与版本无关。
+  const items = (t.match(/[•·]/g) ?? []).length
+  ck('弹窗列出更新要点', items >= 3, `列出 ${items} 条`)
 
   await tap(p, '知道了')
   const saved = await p.evaluate(() => localStorage.getItem('cda.lastSeenVersion'))

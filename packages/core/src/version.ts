@@ -9,7 +9,7 @@
  *   - 跳版本升级时，把中间所有版本的说明一起展示
  */
 
-export const APP_VERSION = '1.0.0'
+export const APP_VERSION = '1.0.1'
 export const APP_NAME = '搭 · CDA'
 
 export interface ReleaseNote {
@@ -29,6 +29,17 @@ export interface ReleaseNote {
  * 避免出现「版本变了但没写说明」的静默升级。
  */
 export const RELEASE_NOTES: ReleaseNote[] = [
+  {
+    version: '1.0.1',
+    date: '2026-10-15',
+    highlights: [
+      '可以上传自己的头像了',
+      '注册更轻松：生日、身型、品牌都能先跳过',
+      '新增「我的资料」——随时补填或修改昵称、身型、风格与品牌',
+      '穿搭贴与闲置贴分开浏览，首页可直接切换',
+      '关于页面加入了开发者信息',
+    ],
+  },
   {
     version: '1.0.0',
     date: '2026-10-13',

@@ -85,6 +85,22 @@ export const TESTS = [
     impacts: ['register', 'body', 'tryon', 'frontend'],
   },
 
+  {
+    file: 'scripts/test-v101.mjs',
+    level: 'L1',
+    module: 'v1.0.1',
+    runner: 'api',
+    covers: [
+      '注册时生日/身型/品牌可跳过',
+      '我的资料可补填身型（含 0.5 精度）并落库',
+      '头像上传成功、可取回、带缓存',
+      '头像非图片格式被拒、超 500KB 被拒、未登录不能传',
+      '穿搭/闲置分栏筛选正确且无交集',
+      '非法 kind 被规整',
+    ],
+    impacts: ['register', 'profile', 'avatar', 'post', 'api', 'security'],
+  },
+
   // ── L2 安全设计 ──
   {
     file: 'scripts/test-admin.mjs',

@@ -220,7 +220,15 @@
 
       <!-- ⑥ 头像 -->
       <view v-else class="form">
-        <text class="lab">选择头像底色（演示用纯色，接入上传后换图片）</text>
+        <text class="lab">头像</text>
+        <view class="avapick" @click="pickAvatar">
+          <view class="avapreview" :style="!avatarUrl ? { background: draft.avatarHex } : {}">
+            <image v-if="avatarUrl" class="avapreview-img" :src="avatarUrl" mode="aspectFill" />
+            <text v-else class="avaplus">＋</text>
+          </view>
+          <text class="avahint">{{ avatarUrl ? '已选择，点击可换' : '点击从相册选择（可跳过，之后再设置）' }}</text>
+        </view>
+        <text class="lab">或选一个头像底色</text>
         <view class="avatars">
           <view
             v-for="c in avatarColors"
@@ -257,7 +265,7 @@
     <view class="foot">
       <view v-if="step > 1" class="btn ghost" @click="step--"><text>上一步</text></view>
       <!-- 第 5 步是选填，给出明确的跳过入口 -->
-      <view v-if="step === 5" class="btn ghost" @click="skipBrands"><text>跳过</text></view>
+      <view v-if="step === 3 || step === 5" class="btn ghost" @click="skipStep"><text>跳过</text></view>
       <view class="btn" :class="{ dis: !gate.ok || (step === 6 && password.length < 6) }" @click="next">
         <text>{{ step === 6 ? (submitting ? '提交中…' : '完成注册') : '下一步' }}</text>
       </view>
@@ -294,6 +302,51 @@ const brandKw = ref('')
 const password = ref('')
 const inviteCode = ref('')
 const submitting = ref(false)
+const avatarUrl = ref('')
+/** 注册时先选好图，最后一步再随注册一起传（避免还没账号就先上传） */
+const avatarDataUrl = ref('')
+
+function pickAvatar(): void {
+  uni.chooseImage({
+    count: 1, sizeType: ['compressed'],
+    success: async (r) => {
+      const path = (r.tempFilePaths as string[])[0]
+      if (!path) return
+      try {
+        avatarDataUrl.value = await toDataUrl(path)
+        avatarUrl.value = avatarDataUrl.value
+      } catch {
+        uni.showToast({ title: '读取图片失败', icon: 'none' })
+      }
+    },
+  })
+}
+
+/** 本地路径 → data URL（H5 用 canvas；小程序端走 FileSystemManager） */
+function toDataUrl(path: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const fsm = (uni as unknown as { getFileSystemManager?: () => any }).getFileSystemManager?.()
+    if (fsm?.readFile) {
+      fsm.readFile({ filePath: path, encoding: 'base64',
+        success: (r: { data: string }) => resolve(`data:image/jpeg;base64,${r.data}`),
+        fail: () => reject(new Error('读取失败')) })
+      return
+    }
+    const img = new Image()
+    img.onload = () => {
+      const max = 512
+      const sc = Math.min(1, max / Math.max(img.width, img.height))
+      const cv = document.createElement('canvas')
+      cv.width = Math.round(img.width * sc); cv.height = Math.round(img.height * sc)
+      const ctx = cv.getContext('2d')
+      if (!ctx) return reject(new Error('无法处理'))
+      ctx.drawImage(img, 0, 0, cv.width, cv.height)
+      resolve(cv.toDataURL('image/jpeg', 0.85))
+    }
+    img.onerror = () => reject(new Error('加载失败'))
+    img.src = path
+  })
+}
 
 /* ── 手机号与验证码（演示版） ── */
 const phone = ref('')
@@ -547,8 +600,13 @@ function removeBrand(id: string): void {
   if (i >= 0) draft.brands.splice(i, 1)
 }
 
-function skipBrands(): void {
-  draft.brands = []
+/**
+ * 跳过当前选填步骤。
+ * 第 3 步（生日/身型）与第 5 步（品牌）都是选填 ——
+ * 用户可能不想现在填，强留只会流失。之后可在「我的资料」补。
+ */
+function skipStep(): void {
+  if (step.value === 5) draft.brands = []
   step.value++
 }
 
@@ -595,6 +653,16 @@ async function finish(): Promise<void> {
     })
     setToken(res.token)
     applyServerUser(res.user)
+    // 头像在最后一步随注册一起传 —— 之前没账号可传
+    if (avatarDataUrl.value) {
+      try {
+        const up = await api.uploadAvatar(avatarDataUrl.value)
+        applyServerUser(up.user)
+      } catch {
+        // 头像失败不该阻断注册，提示即可
+        uni.showToast({ title: '头像上传失败，可在「我的资料」重试', icon: 'none' })
+      }
+    }
     uni.showToast({ title: `注册成功 ${res.user.code}`, icon: 'none' })
     setTimeout(() => uni.reLaunch({ url: '/pages/profile/profile' }), 900)
   } catch (e) {
@@ -750,6 +818,11 @@ async function finish(): Promise<void> {
 .bcn { font-size: 10.5px; color: #a0a0a0; }
 .bcheck { font-size: 14px; color: #1a1a1a; }
 .none { padding: 30px 0; text-align: center; color: #b8b8b8; font-size: 12px; }
+.avapick { display: flex; align-items: center; gap: 14px; background: #fff; border-radius: 12px; padding: 14px; margin-bottom: 6px; }
+.avapreview { width: 62px; height: 62px; border-radius: 50%; display: flex; align-items: center; justify-content: center; overflow: hidden; flex-shrink: 0; }
+.avapreview-img { width: 100%; height: 100%; }
+.avaplus { color: #fff; font-size: 26px; }
+.avahint { flex: 1; font-size: 11.5px; color: #9a9a9a; line-height: 17px; }
 .avatars { display: flex; flex-wrap: wrap; gap: 10px; }
 .av { width: 58px; height: 58px; border-radius: 50%; display: flex; align-items: center; justify-content: center; border: 2px solid transparent; }
 .av.on { border-color: #1a1a1a; }

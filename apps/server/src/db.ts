@@ -295,6 +295,22 @@ const MIGRATIONS: Migration[] = [
       `)
     },
   },
+  {
+    version: 4,
+    desc: '头像上传：存文件路径而不是把 base64 塞进数据库',
+    up: (db) => {
+      db.exec(`ALTER TABLE users ADD COLUMN avatar_url TEXT NOT NULL DEFAULT '';`)
+    },
+  },
+  {
+    version: 5,
+    desc: '帖子分类：穿搭贴与闲置贴分开浏览（发布时选择）',
+    up: (db) => {
+      // 默认 outfit —— 老数据都是穿搭贴
+      db.exec(`ALTER TABLE posts ADD COLUMN kind TEXT NOT NULL DEFAULT 'outfit';`)
+      db.exec(`CREATE INDEX idx_posts_kind ON posts(kind, created_at DESC);`)
+    },
+  },
 ]
 
 export function openDb(path: string): DB {

@@ -132,7 +132,7 @@ export interface RegisterStep {
 export const REGISTER_STEPS: RegisterStep[] = [
   { id: 1, title: '选择注册方式', hint: '手机号需验证码；其他方式演示环境直接跳过' },
   { id: 2, title: '昵称与性别', hint: '其他用户看到的就是这些' },
-  { id: 3, title: '基础信息', hint: '生日与身型，用于尺码推荐' },
+  { id: 3, title: '基础信息', hint: '生日与身型，用于尺码推荐 · 也可跳过' },
   { id: 4, title: '选择风格', hint: '可多选，用于推荐品牌与商品' },
   { id: 5, title: '选择品牌', hint: '最多 15 个，可搜索 · 也可跳过' },
   { id: 6, title: '上传头像', hint: '完成注册' },
@@ -182,7 +182,8 @@ export function canAdvance(step: number, d: RegisterDraft, maxBrands: number): {
       if (!d.gender) return { ok: false, reason: '请选择性别' }
       return { ok: true }
     case 3:
-      if (!d.birthday) return { ok: false, reason: '请选择生日' }
+      // 生日与身型**可选** —— 用户可能不想现在填。
+      // 都已允许跳过，之后可在「个人中心 → 我的资料」补填。
       return { ok: true }
     case 4:
       return d.styles.length ? { ok: true } : { ok: false, reason: '至少选择一个风格' }

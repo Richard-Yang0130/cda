@@ -18,6 +18,11 @@
         <view class="sgo" @click="doSearch"><text>搜索</text></view>
       </view>
 
+      <!-- 内容分栏：穿搭贴与闲置贴分开浏览（发布时选择类型） -->
+      <view class="kinds">
+        <text v-for="k in kinds" :key="k.v" class="kind" :class="{ on: kind === k.v }" @click="switchKind(k.v)">{{ k.n }}</text>
+      </view>
+
       <!-- 分类 -->
       <scroll-view class="cats" scroll-x>
         <view
@@ -61,6 +66,9 @@
         </view>
       </view>
 
+      <view v-if="!shown.length" class="empty">
+        <text>{{ kind === 'idle' ? '还没有人挂闲置' : kind === 'outfit' ? '还没有穿搭帖' : '还没有内容' }}</text>
+      </view>
       <view class="more" @click="loadPosts(false)">
         <text>{{ loading ? '加载中…' : hasMore ? '加载更多' : '没有更多了' }}</text>
       </view>
@@ -83,6 +91,12 @@ import NavShell from '@/components/NavShell.vue'
  * 否则瀑布流的视觉节奏验证不出来。
  */
 const keyword = ref('')
+const kinds = [
+  { n: '全部', v: '' },
+  { n: '穿搭', v: 'outfit' },
+  { n: '闲置', v: 'idle' },
+]
+const kind = ref('')
 const cats = ['推荐', '通勤', '叠穿', '小个子', '男装', '配饰']
 const activeCat = ref('推荐')
 
@@ -102,7 +116,7 @@ async function loadPosts(reset = false): Promise<void> {
   loading.value = true
   try {
     const offset = reset ? 0 : nextOffset.value
-    const res = await api.posts(20, offset)
+    const res = await api.posts(20, offset, kind.value)
     const list = (res.posts ?? []) as Post[]
     all.value = reset ? list : [...all.value, ...list]
     hasMore.value = !!res.hasMore
@@ -112,6 +126,12 @@ async function loadPosts(reset = false): Promise<void> {
   } finally {
     loading.value = false
   }
+}
+
+function switchKind(v: string): void {
+  if (kind.value === v) return
+  kind.value = v
+  void loadPosts(true)   // 换分栏要重新从第一页拉
 }
 
 onShow(() => {
@@ -195,6 +215,9 @@ function openPost(po: Post): void {
   font-size: 13px;
 }
 
+.kinds { display: flex; gap: 6px; margin-top: 14px; }
+.kind { font-size: 13px; color: #666; padding: 7px 18px; border-radius: 999px; background: #f2f2f2; }
+.kind.on { background: #1a1a1a; color: #fff; font-weight: 600; }
 .cats {
   white-space: nowrap;
   margin: 12px 0 10px;
@@ -277,6 +300,8 @@ function openPost(po: Post): void {
   color: #b0b0b0;
   margin-left: auto;
 }
+.empty { padding: 50px 0; text-align: center; }
+.empty text { font-size: 13px; color: #b0b0b0; }
 .more { padding: 18px 0 4px; text-align: center; }
 .more text { font-size: 12px; color: #9a9a9a; }
 .foot-note {

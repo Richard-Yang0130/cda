@@ -8,8 +8,9 @@
 
     <view class="hero">
       <!-- 已注册则展示真实用户（头像/昵称/用户码/在线状态），未注册回落到默认 -->
-      <view class="avatar" :style="store.user ? { background: store.user.avatarHex } : {}">
-        <text v-if="!store.user">搭</text>
+      <view class="avatar" :style="store.user && !store.user.avatarUrl ? { background: store.user.avatarHex } : {}">
+        <image v-if="store.user?.avatarUrl" class="avatar-img" :src="absUrl(store.user.avatarUrl)" mode="aspectFill" />
+        <text v-else-if="!store.user">搭</text>
       </view>
       <view class="who">
         <view class="nameline">
@@ -52,6 +53,12 @@
         <text class="mv">{{ m.value }}</text>
         <text class="ml">{{ m.label }}</text>
       </view>
+    </view>
+
+    <view class="settings-entry" @click="goEditProfile">
+      <text class="set-t">我的资料</text>
+      <text class="set-s">昵称 · 性别 · 生日 · 身型 · 风格 · 品牌</text>
+      <text class="arrow">›</text>
     </view>
 
     <view class="settings-entry" @click="goAddress">
@@ -131,7 +138,7 @@ import { computed, ref } from 'vue'
 import { deriveProfile, findProduct, formatPrice, mockPosts, presenceText, type Post } from '@cda/core'
 import { onShow } from '@dcloudio/uni-app'
 import { store, restoreBodyState } from '@/store/app-store'
-import { api, errText } from '@/api/client'
+import { api, apiBase, errText, setToken } from '@/api/client'
 
 const p = computed(() => deriveProfile(store.bodyState))
 /** 在线状态与地区：受用户隐私设置控制（P0-2） */
@@ -221,6 +228,15 @@ async function openMine(key: string): Promise<void> {
 onShow(() => {
   void loadMine()
 })
+
+/** 头像地址可能是 /api/... 相对路径，拼上 API 前缀才能显示 */
+function absUrl(u: string): string {
+  return /^https?:/.test(u) ? u : apiBase() + u.replace(/^\/api/, '')
+}
+
+function goEditProfile(): void {
+  uni.navigateTo({ url: '/pages/profile/edit' })
+}
 
 function goAddress(): void {
   uni.navigateTo({ url: '/pages/address/address' })
