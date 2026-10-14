@@ -9,6 +9,7 @@
  * 用 ?draft=birthday:... 预填，其余全部走真实 UI。
  */
 import puppeteer from 'puppeteer-core'
+const BASE = process.env.CDA_BASE ?? 'http://127.0.0.1:4173'
 const b = await puppeteer.launch({
   executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', headless: true,
   args: ['--no-sandbox','--disable-gpu','--enable-unsafe-swiftshader','--disable-crash-reporter','--disable-breakpad','--user-data-dir=/tmp/cda-full'],
@@ -31,7 +32,7 @@ const stepNow = async () => {
 }
 
 // 从第 1 步开始，只预填生日（原生日期控件无法自动化）
-await p.goto('http://127.0.0.1:4173/#/pages/register/register?draft=birthday:1995-06-15',
+await p.goto(BASE + '/#/pages/register/register?draft=birthday:1995-06-15',
   { waitUntil:'networkidle2', timeout:60000 })
 await new Promise(r=>setTimeout(r,3000))
 ck('起点是第 1 步', (await stepNow()) === 1)

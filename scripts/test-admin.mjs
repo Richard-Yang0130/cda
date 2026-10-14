@@ -10,10 +10,10 @@ async function api(method, path, { token, body } = {}) {
 }
 
 // ── 登录 ──
-const bad = await api('POST','/api/admin/auth/login',{body:{username:'admin',password:'wrongpassword'}})
+const bad = await api('POST','/api/admin/auth/login',{body:{username:(process.env.CDA_ADMIN_USER ?? 'admin'),password:'wrongpassword'}})
 ck('错误密码被拒绝', bad.status === 401, bad.data.error)
 
-const login = await api('POST','/api/admin/auth/login',{body:{username:'admin',password:'AdminPass123456'}})
+const login = await api('POST','/api/admin/auth/login',{body:{username:(process.env.CDA_ADMIN_USER ?? 'admin'),password:(process.env.CDA_ADMIN_PASS ?? 'AdminTest123456')}})
 ck('正确密码登录成功', login.data.ok === true, login.data.admin?.role)
 const T = login.data.token
 ck('返回权限清单（供前端显隐按钮）', Array.isArray(login.data.admin?.perms) && login.data.admin.perms.includes('admin.manage'), `${login.data.admin?.perms?.length} 项`)
@@ -37,14 +37,22 @@ ck('批量生成 5 个邀请码', gen.data.created?.length === 5, gen.data.creat
 
 const dup = await api('POST','/api/admin/invites',{token:T, body:{count:3, prefix:'CDA-BETA'}})
 const all = await api('GET','/api/admin/invites',{token:T})
-const codes = all.data.invites.map(i=>i.code)
+const codes = (all.data.invites ?? []).map(i=>i.code)
 ck('连续生成不撞号', new Set(codes).size === codes.length, `共 ${codes.length} 个，去重后 ${new Set(codes).size} 个`)
 
-const delUsed = await api('DELETE',`/api/admin/invites/${used.code}`,{token:T})
-ck('已使用的邀请码不能作废', delUsed.status === 400, delUsed.data.error)
-const freeCode = all.data.invites.find(i=>!i.usedBy).code
-const delFree = await api('DELETE',`/api/admin/invites/${freeCode}`,{token:T})
-ck('未使用的邀请码可作废', delFree.data.ok === true)
+// used 可能为 undefined（例如注册没成功时），先挡一下再取 .code
+if (!used) { ck('已使用的邀请码不能作废', false, '前置条件缺失：没有已使用的邀请码') }
+else {
+  const delUsed = await api('DELETE',`/api/admin/invites/${used.code}`,{token:T})
+  ck('已使用的邀请码不能作废', delUsed.status === 400, delUsed.data.error)
+}
+const freeCode = (all.data.invites.find(i=>!i.usedBy) ?? {}).code
+if (freeCode) {
+  const delFree = await api('DELETE',`/api/admin/invites/${freeCode}`,{token:T})
+  ck('未使用的邀请码可作废', delFree.data.ok === true)
+} else {
+  ck('未使用的邀请码可作废', false, '没有可用邀请码')
+}
 
 // ── 用户管理 ──
 const users = await api('GET','/api/admin/users',{token:T})

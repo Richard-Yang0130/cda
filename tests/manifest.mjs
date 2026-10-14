@@ -1,0 +1,184 @@
+/**
+ * 测试清单。
+ *
+ * 每个测试文件在这里登记：级别、模块、覆盖点、**影响点标签**。
+ * 影响点标签是这套体系的核心 —— 改了一处代码后，
+ * 用 `node tests/run.mjs --impact <标签>` 就能只跑受影响的用例。
+ *
+ * ── 级别定义 ──
+ *   L0 基础功能   页面能打开、接口能通、字段有值。**改动后必跑，快。**
+ *   L1 核心功能   注册、登录、发帖、私聊等主流程真的走通。
+ *   L2 安全设计   越权、注入、限流、隐私、会话失效。
+ *   L3 性能体验   加载耗时、并发、体积、边界值。
+ *   L4 复杂场景   多状态转换：被拉黑后、禁用后、跨版本升级、
+ *                 并发操作、数据一致性。
+ */
+
+export const LEVELS = {
+  L0: { name: '基础功能', desc: '页面可打开、接口可通、字段有值' },
+  L1: { name: '核心功能', desc: '主流程端到端走通' },
+  L2: { name: '安全设计', desc: '越权、限流、隐私、会话失效' },
+  L3: { name: '性能体验', desc: '耗时、并发、体积、边界值' },
+  L4: { name: '复杂场景', desc: '多状态转换与数据一致性' },
+}
+
+/**
+ * 测试登记表。
+ *
+ * file        测试脚本路径（相对仓库根）
+ * level       L0~L4
+ * module      所属功能模块
+ * runner      'api' = 需要后端；'browser' = 需要后端托管前端
+ * covers      覆盖点（给人看的）
+ * impacts     **影响点标签** —— 改了这些地方就该跑它
+ */
+export const TESTS = [
+  // ── L0 基础功能 ──
+  {
+    file: 'scripts/test-pages.mjs',
+    level: 'L0',
+    module: '页面',
+    runner: 'browser',
+    covers: ['10 个用户端页面能打开', '关键元素存在', '无运行时报错'],
+    impacts: ['page', 'ui', 'frontend'],
+  },
+  {
+    file: 'scripts/test-api.mjs',
+    level: 'L0',
+    module: '接口',
+    runner: 'api',
+    covers: [
+      '注册/登录/登出可用', '发帖/点赞/评论/收藏可用',
+      '消息收发可用', '地址与衣橱 CRUD 可用',
+    ],
+    impacts: ['api', 'backend', 'db', 'auth', 'post', 'message', 'address', 'wardrobe'],
+  },
+
+  // ── L1 核心功能 ──
+  {
+    file: 'scripts/test-e2e-register.mjs',
+    level: 'L1',
+    module: '注册+社区',
+    runner: 'browser',
+    covers: [
+      '浏览器完成注册并落库',
+      '另一个账号能搜到该用户',
+      '跨用户发消息、发帖、评论、点赞',
+      '首页信息流显示他人帖子',
+    ],
+    impacts: ['register', 'auth', 'api', 'post', 'message', 'frontend', 'page'],
+  },
+  {
+    file: 'scripts/test-full-register.mjs',
+    level: 'L1',
+    module: '注册',
+    runner: 'browser',
+    covers: ['6 步注册全流程', '验证码输入', '各步准入校验', '完成跳转'],
+    impacts: ['register', 'frontend', 'page'],
+  },
+  {
+    file: 'scripts/test-round3.mjs',
+    level: 'L1',
+    module: '注册+人偶',
+    runner: 'browser',
+    covers: ['品牌步骤可跳过', '三围按身高体重估算', '已穿衣服点击脱下'],
+    impacts: ['register', 'body', 'tryon', 'frontend'],
+  },
+
+  // ── L2 安全设计 ──
+  {
+    file: 'scripts/test-admin.mjs',
+    level: 'L2',
+    module: '管理后台',
+    runner: 'api',
+    covers: [
+      '用户 token 与后台 token 双向隔离',
+      '三级角色权限边界',
+      '禁用必须填原因',
+      '禁用即踢下线',
+      '后台登录限流（5 次锁 30 分钟）',
+      '审计日志记录操作与原因',
+    ],
+    impacts: ['admin', 'auth', 'security', 'db'],
+  },
+  {
+    file: 'scripts/test-auth-and-register.mjs',
+    level: 'L2',
+    module: '鉴权',
+    runner: 'browser',
+    covers: [
+      '未登录访问主页面被引导到登录页',
+      '手机号格式校验（11 位）',
+      '非法手机号被拦截',
+    ],
+    impacts: ['auth', 'register', 'security', 'frontend'],
+  },
+
+  // ── L3 性能体验 ──
+  {
+    file: 'scripts/test-perf.mjs',
+    level: 'L3',
+    module: '性能',
+    runner: 'api',
+    covers: [
+      '接口响应耗时',
+      '分页正确性',
+      '静态资源 gzip 生效',
+      '数据库体积增长合理',
+    ],
+    impacts: ['perf', 'api', 'db'],
+  },
+
+  // ── L4 复杂场景 ──
+  {
+    file: 'scripts/test-scenarios.mjs',
+    level: 'L4',
+    module: '多状态',
+    runner: 'api',
+    covers: [
+      '被拉黑者的全部行为受限',
+      '禁用→启用→再登录的状态流转',
+      '账号删除后关联数据一并清理',
+      '邀请码一次性与并发注册',
+      '隐私设置切换后搜索可见性变化',
+    ],
+    impacts: ['db', 'api', 'auth', 'security', 'admin'],
+  },
+  {
+    file: 'scripts/test-v1-features.mjs',
+    level: 'L4',
+    module: '版本与聊天',
+    runner: 'browser',
+    covers: [
+      '聊天历史持久化（刷新后仍在）',
+      '版本更新弹窗只在版本变化时出现',
+      '跨版本升级展示多条更新说明',
+    ],
+    impacts: ['message', 'version', 'frontend'],
+  },
+  {
+    file: 'scripts/test-ui-fixes.mjs',
+    level: 'L4',
+    module: '交互回归',
+    runner: 'browser',
+    covers: [
+      '注册页按钮常驻可见（无需滚动到底）',
+      '消息页有导航',
+      '会话头部可进他人主页',
+      '设置入口在右上角',
+    ],
+    impacts: ['ui', 'frontend', 'page'],
+  },
+]
+
+/** 从影响点标签反查要跑哪些用例 */
+export function testsForImpacts(tags) {
+  const set = new Set(tags)
+  return TESTS.filter((t) => t.impacts.some((i) => set.has(i)))
+}
+
+/** 按级别取用例 */
+export function testsForLevels(levels) {
+  const set = new Set(levels.map((l) => l.toUpperCase()))
+  return TESTS.filter((t) => set.has(t.level))
+}

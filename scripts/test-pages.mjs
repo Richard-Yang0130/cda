@@ -6,9 +6,9 @@ import puppeteer from 'puppeteer-core'
 
 const PAGES = [
   ['首页',        '#/pages/home/home',              ['搜单品、穿搭、用户']],
-  ['帖子详情',    '#/pages/post/post?id=po2',        ['牛仔外套']],
+  ['帖子详情',    '#/pages/post/post?id=po2',        ['评论', '试穿']],
   ['确认支付',    '#/pages/pay/pay?productId=p_denim_jacket', ['未接入真实支付', '跳转第三方平台', '微信支付']],
-  ['注册-第1步',  '#/pages/register/register',       ['选择登录方式', '手机号', '微信']],
+  ['注册-第1步',  '#/pages/register/register',       ['选择注册方式', '手机号', '微信']],
   ['消息页',      '#/pages/messages/messages',       ['搜索用户', '消息']],
   ['设置页',      '#/pages/settings/settings',       ['不被搜索到', '注销账号', '支付方式', '国家与地区']],
   ['个人主页',    '#/pages/profile/profile',         ['我的收藏', '我的关注', '浏览历史', '收货地址']],
@@ -17,6 +17,7 @@ const PAGES = [
   ['发布',        '#/pages/publish/publish',         ['发帖子', '卖闲置']],
 ]
 
+const BASE = process.env.CDA_BASE ?? 'http://127.0.0.1:4173'
 const b = await puppeteer.launch({
   executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
   headless: true,
@@ -41,8 +42,11 @@ for (const [label, hash, expects] of PAGES) {
   })
   const errs = []
   p.on('pageerror', (e) => errs.push(String(e).slice(0, 120)))
-  p.on('console', (m) => { if (m.type() === 'error') errs.push(m.text().slice(0, 120)) })
-  await p.goto('http://127.0.0.1:4173/' + hash, { waitUntil: 'networkidle2', timeout: 60000 })
+  p.on('console', (m) => {
+    // 401 是「未登录时后端正常拒绝」，属于预期行为，不算页面报错
+    if (m.type() === 'error' && !/401|Unauthorized/.test(m.text())) errs.push(m.text().slice(0, 120))
+  })
+  await p.goto(BASE + '/' + hash, { waitUntil: 'networkidle2', timeout: 60000 })
   await new Promise((r) => setTimeout(r, 3500))
   const body = await p.evaluate(() => document.body.innerText)
   const missing = expects.filter((t) => !body.includes(t))

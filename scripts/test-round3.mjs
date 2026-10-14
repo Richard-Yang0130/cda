@@ -1,5 +1,6 @@
 /** 自测本轮三项：跳过品牌 / 三围估算 / 已穿衣服点击脱下 */
 import puppeteer from 'puppeteer-core'
+const BASE = process.env.CDA_BASE ?? 'http://127.0.0.1:4173'
 const b = await puppeteer.launch({
   executablePath:'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', headless:true,
   args:['--no-sandbox','--disable-gpu','--enable-unsafe-swiftshader','--disable-crash-reporter','--disable-breakpad','--user-data-dir=/tmp/cda-r3'],
@@ -19,7 +20,7 @@ const tap = async (p,l)=>{ await p.evaluate(x=>{const a=[...document.querySelect
 // ① 第 5 步：有「跳过」且可跳
 {
   const p = await mk()
-  await p.goto('http://127.0.0.1:4173/#/pages/register/register?step=5&draft=nickname:%E6%B5%8B,gender:female,birthday:1995-06-15,loginMethod:phone,styles:s_minimal',{waitUntil:'networkidle2',timeout:60000})
+  await p.goto(BASE + '/#/pages/register/register?step=5&draft=nickname:%E6%B5%8B,gender:female,birthday:1995-06-15,loginMethod:phone,styles:s_minimal',{waitUntil:'networkidle2',timeout:60000})
   await new Promise(r=>setTimeout(r,3500))
   ck('第 5 步出现「跳过」按钮', (await txt(p)).includes('跳过'))
   ck('未选品牌时提示可跳过', (await txt(p)).includes('可以跳过'))
@@ -31,7 +32,7 @@ const tap = async (p,l)=>{ await p.evaluate(x=>{const a=[...document.querySelect
 // ② 第 3 步：按身高体重估算三围
 {
   const p = await mk()
-  await p.goto('http://127.0.0.1:4173/#/pages/register/register?step=3&draft=nickname:%E6%B5%8B,gender:female,birthday:1995-06-15,loginMethod:phone,heightCm:160,weightKg:55',{waitUntil:'networkidle2',timeout:60000})
+  await p.goto(BASE + '/#/pages/register/register?step=3&draft=nickname:%E6%B5%8B,gender:female,birthday:1995-06-15,loginMethod:phone,heightCm:160,weightKg:55',{waitUntil:'networkidle2',timeout:60000})
   await new Promise(r=>setTimeout(r,3500))
   ck('出现「按身高体重估算三围」按钮', (await txt(p)).includes('按身高体重估算'))
   const before = await p.evaluate(()=>[...document.querySelectorAll('.ginput input')].map(e=>e.value).join('/'))
@@ -47,7 +48,7 @@ const tap = async (p,l)=>{ await p.evaluate(x=>{const a=[...document.querySelect
 // ③ 衣橱列表现已支持「再点一下脱下」
 {
   const p = await mk()
-  await p.goto('http://127.0.0.1:4173/#/pages/index/index',{waitUntil:'networkidle2',timeout:60000})
+  await p.goto(BASE + '/#/pages/index/index',{waitUntil:'networkidle2',timeout:60000})
   await new Promise(r=>setTimeout(r,16000)) // 等 3D 网格与衣橱渲染
   const items = await p.evaluate(()=>document.querySelectorAll('.wardrobe-item').length)
   ck(`衣橱列表已渲染（${items} 件）`, items > 0)

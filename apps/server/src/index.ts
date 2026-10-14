@@ -116,12 +116,20 @@ function page(req: Req): { limit: number; offset: number } {
   return { limit, offset }
 }
 function paged<T>(res: ServerResponse, key: string, rows: T[], limit: number, offset: number): void {
+  /*
+   * 调用方会多取一条（limit + 1）来判断还有没有下一页，避免额外的 COUNT 查询。
+   * **必须把多取的那条切掉** —— 否则每页多返回一条，
+   * 且下一页会与上一页重叠一条。
+   * （这是 L3 分页用例抓出来的真 bug：请求 limit=5 返回了 6 条，
+   *   第二页与第一页有 1 条重复。）
+   */
+  const hasMore = rows.length > limit
+  const page = hasMore ? rows.slice(0, limit) : rows
   json(res, 200, {
     ok: true,
-    [key]: rows,
-    // 多取一条来判断还有没有下一页，避免额外的 COUNT 查询
-    hasMore: rows.length > limit,
-    nextOffset: rows.length > limit ? offset + limit : null,
+    [key]: page,
+    hasMore,
+    nextOffset: hasMore ? offset + limit : null,
   })
 }
 
