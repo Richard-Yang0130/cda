@@ -210,6 +210,75 @@ const MIGRATIONS: Migration[] = [
       `)
     },
   },
+  {
+    version: 2,
+    desc: '管理后台：管理员、独立会话、审计日志、举报',
+    up: (db) => {
+      db.exec(`
+        -- ⚠️ 管理员**绝不放进 users 表**：
+        --   1) 用户表被攻破时管理员会一起沦陷
+        --   2) 权限模型不同（用户是平的，管理员有角色）
+        --   3) 管理员不该走用户那套注册流程
+        CREATE TABLE admins (
+          id            TEXT PRIMARY KEY,
+          username      TEXT NOT NULL UNIQUE,
+          password_hash TEXT NOT NULL,
+          password_salt TEXT NOT NULL,
+          display_name  TEXT NOT NULL DEFAULT '',
+          role          TEXT NOT NULL DEFAULT 'operator',
+          status        TEXT NOT NULL DEFAULT 'active',
+          last_login_at TEXT,
+          last_login_ip TEXT,
+          created_at    TEXT NOT NULL
+        );
+
+        -- 与用户的 sessions 完全隔离：用户 token 换不到后台权限
+        CREATE TABLE admin_sessions (
+          token      TEXT PRIMARY KEY,
+          admin_id   TEXT NOT NULL REFERENCES admins(id) ON DELETE CASCADE,
+          ip         TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          expires_at TEXT NOT NULL
+        );
+        CREATE INDEX idx_admin_sessions_admin ON admin_sessions(admin_id);
+
+        -- 审计日志：后台能封号能删内容，出事必须查得到「谁在何时因为什么做了什么」
+        CREATE TABLE admin_logs (
+          id         TEXT PRIMARY KEY,
+          admin_id   TEXT NOT NULL,
+          username   TEXT NOT NULL DEFAULT '',
+          action     TEXT NOT NULL,
+          target     TEXT NOT NULL DEFAULT '',
+          detail     TEXT NOT NULL DEFAULT '',
+          ip         TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL
+        );
+        CREATE INDEX idx_admin_logs_created ON admin_logs(created_at DESC);
+
+        CREATE TABLE reports (
+          id          TEXT PRIMARY KEY,
+          reporter    TEXT NOT NULL,
+          target_type TEXT NOT NULL,
+          target_id   TEXT NOT NULL,
+          reason      TEXT NOT NULL,
+          status      TEXT NOT NULL DEFAULT 'pending',
+          handled_by  TEXT,
+          handled_at  TEXT,
+          note        TEXT NOT NULL DEFAULT '',
+          created_at  TEXT NOT NULL
+        );
+        CREATE INDEX idx_reports_status ON reports(status, created_at DESC);
+
+        -- 后台登录也限流，且比用户端更严（5 次锁 30 分钟，见 admin.ts）
+        CREATE TABLE admin_attempts (
+          key          TEXT PRIMARY KEY,
+          count        INTEGER NOT NULL DEFAULT 0,
+          first_at     TEXT NOT NULL,
+          locked_until TEXT
+        );
+      `)
+    },
+  },
 ]
 
 export function openDb(path: string): DB {

@@ -24,6 +24,7 @@ SSH_OPTS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o Connect
 REMOTE_DIR="/opt/cda"
 SERVICE="cda"
 PORT="8787"
+ADMIN_PASS="${CDA_ADMIN_PASS:-}"
 INVITES="${CDA_INVITES:-CDA-BETA-01,CDA-BETA-02,CDA-BETA-03,CDA-BETA-04,CDA-BETA-05,CDA-BETA-06,CDA-BETA-07,CDA-BETA-08,CDA-BETA-09,CDA-BETA-10,CDA-BETA-11,CDA-BETA-12}"
 
 say() { printf "\033[1;36m▶ %s\033[0m\n" "$*"; }
@@ -93,6 +94,8 @@ Environment=CDA_PORT=$PORT
 Environment=CDA_DB=/opt/cda/data/cda.db
 Environment=CDA_WEB=/opt/cda/web
 Environment=CDA_INVITES=$INVITES
+Environment=CDA_ADMIN_USER=${CDA_ADMIN_USER:-admin}
+Environment=CDA_ADMIN_PASS=$ADMIN_PASS
 ExecStart=/usr/bin/node --experimental-strip-types src/index.ts
 Restart=always
 RestartSec=3

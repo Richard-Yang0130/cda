@@ -1,6 +1,26 @@
 {
     "pages": [
     {
+      "path": "pages/admin/login",
+      "style": { "navigationStyle": "custom" }
+    },
+    {
+      "path": "pages/admin/dashboard",
+      "style": { "navigationStyle": "custom" }
+    },
+    {
+      "path": "pages/admin/invites",
+      "style": { "navigationStyle": "custom" }
+    },
+    {
+      "path": "pages/admin/users",
+      "style": { "navigationStyle": "custom" }
+    },
+    {
+      "path": "pages/admin/logs",
+      "style": { "navigationStyle": "custom" }
+    },
+    {
       "path": "pages/home/home",
       "style": { "navigationStyle": "custom", "navigationBarTitleText": "搭 · CDA" }
     },

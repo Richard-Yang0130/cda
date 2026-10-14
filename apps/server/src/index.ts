@@ -19,6 +19,11 @@ import {
   checkAttempts, recordFailure, clearFailures,
   type DB,
 } from './db.ts'
+import {
+  ADMIN_PERMS, can, checkAdminAttempts, recordAdminFailure, clearAdminFailures,
+  issueAdminToken, currentAdmin, audit, toAdmin, seedOwner, deny,
+  type AdminRole,
+} from './admin.ts'
 
 const PORT = Number(process.env.CDA_PORT ?? 8787)
 const DB_PATH = process.env.CDA_DB ?? './data/cda.db'
@@ -26,6 +31,7 @@ mkdirSync(dirname(DB_PATH), { recursive: true })
 const db: DB = openDb(DB_PATH)
 
 seedInvites()
+seedOwner(db)
 
 // ── 小工具 ────────────────────────────────────────────
 
@@ -663,6 +669,241 @@ route('DELETE', '/api/wardrobe/:id', true, (req, res) => {
   json(res, 200, { ok: true })
 })
 
+// ── 管理后台路由 ──────────────────────────────────────
+
+const ADMIN_PERM_OF: Record<string, string> = {
+  'GET /invites': 'invite.write',
+  'POST /invites': 'invite.write',
+  'DELETE /invites': 'invite.write',
+  'GET /users': 'user.read',
+  'PATCH /users': 'user.disable',
+  'DELETE /users': 'user.delete',
+  'GET /logs': 'audit.read',
+  'GET /dashboard': 'stats.read',
+}
+
+function adminIp(req: Req): string {
+  return String(req.headers['x-forwarded-for'] ?? req.socket.remoteAddress ?? '')
+    .split(',')[0]!.trim()
+}
+
+async function handleAdmin(req: Req, res: ServerResponse, pathname: string): Promise<void> {
+  const sub = pathname.replace(/^\/api\/admin/, '') || '/'
+  const ip = adminIp(req)
+
+  // ── 登录（无需 token）──
+  if (sub === '/auth/login' && req.method === 'POST') {
+    let body: any
+    try { body = await readBody(req) } catch (e) { return fail(res, 400, (e as Error).message) }
+    const username = String(body.username ?? '').trim()
+    const password = String(body.password ?? '')
+    if (!username || !password) return fail(res, 400, '请输入账号与密码')
+
+    const keys = [`a:${username}`, `i:${ip}`]
+    for (const k of keys) {
+      const c = checkAdminAttempts(db, k)
+      if (!c.allowed) {
+        res.setHeader('retry-after', String(c.retryAfterSec ?? 1800))
+        return fail(res, 429, `尝试过于频繁，请 ${Math.ceil((c.retryAfterSec ?? 1800) / 60)} 分钟后再试`)
+      }
+    }
+
+    const a = db.prepare('SELECT * FROM admins WHERE username = ?').get(username) as any
+    // 账号不存在与密码错误返回同一句话，避免枚举管理员账号
+    if (!a || !verifyPassword(password, a.password_hash, a.password_salt)) {
+      for (const k of keys) recordAdminFailure(db, k)
+      return fail(res, 401, '账号或密码不正确')
+    }
+    if (a.status !== 'active') return fail(res, 403, '该管理员已被禁用')
+    for (const k of keys) clearAdminFailures(db, k)
+
+    db.prepare('UPDATE admins SET last_login_at = ?, last_login_ip = ? WHERE id = ?').run(nowIso(), ip, a.id)
+    const token = issueAdminToken(db, a.id, ip)
+    audit(db, a, 'admin.login', a.username, `从 ${ip} 登录`, ip)
+    return json(res, 200, { ok: true, token, admin: toAdmin(a) })
+  }
+
+  // ── 以下全部需要管理员 token ──
+  const me = currentAdmin(db, req.headers.authorization ?? '')
+  if (!me) return fail(res, 401, '未登录或登录已过期')
+  const role = me.role as AdminRole
+
+  let body: any = {}
+  if (req.method !== 'GET') {
+    try { body = await readBody(req) } catch (e) { return fail(res, 400, (e as Error).message) }
+  }
+
+  /** 统一鉴权：把方法+路径前缀映射到权限位 */
+  const need = (perm: string): boolean => {
+    if (!can(role, perm)) { deny(res, perm); return false }
+    return true
+  }
+
+  if (sub === '/auth/logout' && req.method === 'POST') {
+    const t = (req.headers.authorization ?? '').slice(7)
+    db.prepare('DELETE FROM admin_sessions WHERE token = ?').run(t)
+    audit(db, me, 'admin.logout', me.username, '', ip)
+    return json(res, 200, { ok: true })
+  }
+
+  if (sub === '/me' && req.method === 'GET') {
+    return json(res, 200, { ok: true, admin: toAdmin(me) })
+  }
+
+  // ── 邀请码管理（最紧急：现在只有 12 个，用完要改数据库）──
+  if (sub === '/invites' && req.method === 'GET') {
+    if (!need('invite.write')) return
+    const rows = db.prepare(`
+      SELECT i.*, u.nickname AS used_nickname
+      FROM invites i LEFT JOIN users u ON u.code = i.used_by
+      ORDER BY i.used_by IS NOT NULL, i.code`).all() as any[]
+    return json(res, 200, {
+      ok: true,
+      invites: rows.map((r) => ({
+        code: r.code, note: r.note, usedBy: r.used_by,
+        usedNickname: r.used_nickname, usedAt: r.used_at, createdAt: r.created_at,
+      })),
+    })
+  }
+
+  if (sub === '/invites' && req.method === 'POST') {
+    if (!need('invite.write')) return
+    const count = Math.min(50, Math.max(1, Number(body.count) || 1))
+    const prefix = String(body.prefix ?? 'CDA-BETA').replace(/[^A-Za-z0-9-]/g, '').slice(0, 16) || 'CDA-BETA'
+    const note = String(body.note ?? '').slice(0, 100)
+    const created: string[] = []
+    const ins = db.prepare('INSERT OR IGNORE INTO invites (code, note, created_at) VALUES (?,?,?)')
+    // 从现有最大编号往后接，避免与已有邀请码撞号
+    let n = (db.prepare('SELECT COUNT(*) AS n FROM invites').get() as any).n
+    for (let i = 0; i < count; i++) {
+      let code = ''
+      for (let tryN = 0; tryN < 200; tryN++) {
+        n++
+        code = `${prefix}-${String(n).padStart(2, '0')}`
+        const exists = db.prepare('SELECT 1 FROM invites WHERE code = ?').get(code)
+        if (!exists) break
+      }
+      if (!code || db.prepare('SELECT 1 FROM invites WHERE code = ?').get(code)) continue
+      ins.run(code, note, nowIso())
+      created.push(code)
+    }
+    audit(db, me, 'invite.create', created.join(','), `生成 ${created.length} 个：${note}`, ip)
+    return json(res, 200, { ok: true, created })
+  }
+
+  const invDel = sub.match(/^\/invites\/(.+)$/)
+  if (invDel && req.method === 'DELETE') {
+    if (!need('invite.write')) return
+    const code = decodeURIComponent(invDel[1]!)
+    const row = db.prepare('SELECT * FROM invites WHERE code = ?').get(code) as any
+    if (!row) return fail(res, 404, '邀请码不存在')
+    // 已使用的不能删 —— 删了会丢掉「谁用哪个码注册的」这条线索
+    if (row.used_by) return fail(res, 400, '该邀请码已被使用，不能作废')
+    db.prepare('DELETE FROM invites WHERE code = ?').run(code)
+    audit(db, me, 'invite.delete', code, '', ip)
+    return json(res, 200, { ok: true })
+  }
+
+  // ── 用户管理 ──
+  if (sub === '/users' && req.method === 'GET') {
+    if (!need('user.read')) return
+    const q = (req.query.get('q') ?? '').trim()
+    const status = req.query.get('status') ?? ''
+    const { limit, offset } = page(req)
+    const where: string[] = []
+    const vals: unknown[] = []
+    if (q) { where.push('(nickname LIKE ? OR code LIKE ? OR phone LIKE ?)'); vals.push(`%${q}%`, `%${q}%`, `%${q}%`) }
+    if (status) { where.push('status = ?'); vals.push(status) }
+    const sql = `SELECT * FROM users ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+      ORDER BY created_at DESC LIMIT ? OFFSET ?`
+    const rows = db.prepare(sql).all(...(vals as any[]), limit + 1, offset) as any[]
+    const showPhone = can(role, 'user.phone')
+    const list = rows.map((u) => ({
+      code: u.code, nickname: u.nickname, gender: u.gender, status: u.status,
+      avatarHex: u.avatar_hex, createdAt: u.created_at, lastSeenAt: u.last_seen_at,
+      isOnline: !!u.is_online,
+      // 手机号是唯一能定位到真人的标识：viewer 完全不可见，其他人看到也记审计
+      phone: showPhone ? (u.phone ?? '') : '***',
+      email: showPhone ? (u.email ?? '') : '***',
+      postCount: (db.prepare('SELECT COUNT(*) AS n FROM posts WHERE author_code = ?').get(u.code) as any).n,
+    }))
+    if (q && showPhone) audit(db, me, 'user.search', q, '含手机号检索', ip)
+    return paged(res, 'users', list, limit, offset)
+  }
+
+  const userPatch = sub.match(/^\/users\/([^/]+)$/)
+  if (userPatch && req.method === 'PATCH') {
+    if (!need('user.disable')) return
+    const code = decodeURIComponent(userPatch[1]!)
+    const status = String(body.status ?? '')
+    if (!['active', 'disabled'].includes(status)) return fail(res, 400, '状态只能是 active 或 disabled')
+    // **禁用必须填原因** —— 强制写进审计日志，否则事后说不清为什么封的人
+    const reason = String(body.reason ?? '').trim()
+    if (status === 'disabled' && reason.length < 2) {
+      return fail(res, 400, '禁用用户必须填写原因')
+    }
+    const u = db.prepare('SELECT * FROM users WHERE code = ?').get(code) as any
+    if (!u) return fail(res, 404, '用户不存在')
+    db.prepare('UPDATE users SET status = ? WHERE code = ?').run(status, code)
+    if (status === 'disabled') {
+      // 禁用即踢下线，否则他手上的 token 还能用到过期
+      db.prepare('DELETE FROM sessions WHERE code = ?').run(code)
+      db.prepare('UPDATE users SET is_online = 0 WHERE code = ?').run(code)
+    }
+    audit(db, me, status === 'disabled' ? 'user.disable' : 'user.enable', code, reason, ip)
+    return json(res, 200, { ok: true })
+  }
+
+  const userDel = sub.match(/^\/users\/([^/]+)$/)
+  if (userDel && req.method === 'DELETE') {
+    if (!need('user.delete')) return
+    const code = decodeURIComponent(userDel[1]!)
+    const reason = String(body.reason ?? '').trim()
+    if (reason.length < 2) return fail(res, 400, '删除用户必须填写原因')
+    const u = db.prepare('SELECT * FROM users WHERE code = ?').get(code) as any
+    if (!u) return fail(res, 404, '用户不存在')
+    // 外键都是 ON DELETE CASCADE，删用户会连带清掉他的帖子/消息/地址等
+    db.prepare('DELETE FROM users WHERE code = ?').run(code)
+    audit(db, me, 'user.delete', code, `昵称 ${u.nickname}｜原因：${reason}`, ip)
+    return json(res, 200, { ok: true })
+  }
+
+  // ── 审计日志 ──
+  if (sub === '/logs' && req.method === 'GET') {
+    if (!need('audit.read')) return
+    const { limit, offset } = page(req)
+    const rows = db.prepare('SELECT * FROM admin_logs ORDER BY created_at DESC LIMIT ? OFFSET ?')
+      .all(limit + 1, offset) as any[]
+    return paged(res, 'logs', rows.map((r) => ({
+      id: r.id, username: r.username, action: r.action, target: r.target,
+      detail: r.detail, ip: r.ip, createdAt: r.created_at,
+    })), limit, offset)
+  }
+
+  // ── 看板 ──
+  if (sub === '/dashboard' && req.method === 'GET') {
+    if (!need('stats.read')) return
+    const one = (sql: string, ...a: unknown[]) => (db.prepare(sql).get(...(a as any[])) as any).n as number
+    const since7 = new Date(Date.now() - 7 * 864e5).toISOString()
+    return json(res, 200, {
+      ok: true,
+      stats: {
+        users: one('SELECT COUNT(*) AS n FROM users'),
+        usersNew7d: one('SELECT COUNT(*) AS n FROM users WHERE created_at >= ?', since7),
+        online: one('SELECT COUNT(*) AS n FROM users WHERE is_online = 1'),
+        posts: one('SELECT COUNT(*) AS n FROM posts'),
+        comments: one('SELECT COUNT(*) AS n FROM comments'),
+        messages: one('SELECT COUNT(*) AS n FROM messages'),
+        invitesTotal: one('SELECT COUNT(*) AS n FROM invites'),
+        invitesAvailable: one('SELECT COUNT(*) AS n FROM invites WHERE used_by IS NULL'),
+        reportsPending: one("SELECT COUNT(*) AS n FROM reports WHERE status = 'pending'"),
+      },
+    })
+  }
+
+  return fail(res, 404, `无此管理接口：${req.method} ${pathname}`)
+}
+
 // ── 静态文件 ──────────────────────────────────────────
 
 const WEB_ROOT = process.env.CDA_WEB ?? '../client/dist/build/h5'
@@ -725,6 +966,13 @@ const server = createServer(async (rawReq, res) => {
   req.params = {}
 
   if (url.pathname === '/api/health') return json(res, 200, { ok: true, ts: nowIso() })
+
+  // ── 管理后台 ──
+  // 与用户接口走**完全独立**的分发路径：独立 token、独立中间件。
+  // 用户 token 拿到这里一定解析不出管理员，反之亦然。
+  if (url.pathname.startsWith('/api/admin')) {
+    return handleAdmin(req, res, url.pathname)
+  }
 
   // ── 静态前端 ──
   // 由后端一起托管前端，前后端同源：只需暴露一个端口、一条隧道，

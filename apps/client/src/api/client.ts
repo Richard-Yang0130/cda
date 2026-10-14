@@ -180,3 +180,62 @@ export const api = {
 
   health: () => request<{ ts: string }>('/health', { anonymous: true, timeout: 4000 }),
 }
+
+// ── 管理后台 ──
+// 独立 token（存在另一个 key 里），与用户 token 互不影响 ——
+// 同一个浏览器可以既是用户又是管理员，登出用户不会把后台也登出。
+const ADMIN_TOKEN_KEY = 'cda.adminToken.v1'
+
+export function getAdminToken(): string {
+  try { return String(uni.getStorageSync(ADMIN_TOKEN_KEY) ?? '') } catch { return '' }
+}
+export function setAdminToken(t: string): void {
+  try { if (t) uni.setStorageSync(ADMIN_TOKEN_KEY, t); else uni.removeStorageSync(ADMIN_TOKEN_KEY) } catch { /* 忽略 */ }
+}
+
+async function adminRequest<T = any>(path: string, opts: RequestOptions = {}): Promise<T> {
+  const { method = 'GET', body, timeout = 12000, anonymous } = opts
+  const headers: Record<string, string> = { 'content-type': 'application/json' }
+  if (!anonymous) {
+    const t = getAdminToken()
+    if (t) headers.authorization = `Bearer ${t}`
+  }
+  const res = await new Promise<{ statusCode: number; data: any }>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new ApiFailure(0, '请求超时')), timeout)
+    uni.request({
+      url: apiBase() + '/admin' + path,
+      method: method as never, header: headers, data: body as never, timeout,
+      success: (r) => { clearTimeout(timer); resolve({ statusCode: r.statusCode, data: r.data }) },
+      fail: (e) => { clearTimeout(timer); reject(new ApiFailure(0, e?.errMsg ?? '网络不可用')) },
+    })
+  })
+  const data = res.data ?? {}
+  if (res.statusCode === 401 && !anonymous) { setAdminToken(''); throw new ApiFailure(401, data.error ?? '登录已过期') }
+  if (res.statusCode < 200 || res.statusCode >= 300 || data.ok === false) {
+    throw new ApiFailure(res.statusCode, data.error ?? `请求失败（${res.statusCode}）`)
+  }
+  return data as T
+}
+
+export const adminApi = {
+  login: (username: string, password: string) =>
+    adminRequest<{ token: string; admin: any }>('/auth/login', { method: 'POST', body: { username, password }, anonymous: true }),
+  logout: () => adminRequest('/auth/logout', { method: 'POST' }),
+  me: () => adminRequest<{ admin: any }>('/me'),
+
+  dashboard: () => adminRequest<{ stats: Record<string, number> }>('/dashboard'),
+
+  invites: () => adminRequest<{ invites: any[] }>('/invites'),
+  createInvites: (count: number, prefix: string, note: string) =>
+    adminRequest<{ created: string[] }>('/invites', { method: 'POST', body: { count, prefix, note } }),
+  deleteInvite: (code: string) => adminRequest(`/invites/${encodeURIComponent(code)}`, { method: 'DELETE' }),
+
+  users: (q = '', status = '', limit = 20, offset = 0) =>
+    adminRequest<{ users: any[]; hasMore: boolean }>(`/users?q=${encodeURIComponent(q)}&status=${status}&limit=${limit}&offset=${offset}`),
+  setUserStatus: (code: string, status: string, reason: string) =>
+    adminRequest(`/users/${encodeURIComponent(code)}`, { method: 'PATCH', body: { status, reason } }),
+  deleteUser: (code: string, reason: string) =>
+    adminRequest(`/users/${encodeURIComponent(code)}`, { method: 'DELETE', body: { reason } }),
+
+  logs: (limit = 30, offset = 0) => adminRequest<{ logs: any[]; hasMore: boolean }>(`/logs?limit=${limit}&offset=${offset}`),
+}
