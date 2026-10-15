@@ -149,6 +149,13 @@ import { TryonEngine, createH5Platform, WEAR_MODE_LABEL, GARMENT_REGISTRY } from
 import { mountStage, type StageHost } from '@/platform/stage'
 import { store } from '@/store/app-store'
 
+/*
+ * 人偶改用 MakeHuman 官方骨架网格（CC0）。
+ * 骨架资产**两性共用一份** —— 性别本身就是一个形变目标，
+ * 不再像旧的静态 OBJ 那样按性别分文件。
+ */
+const RIG_URL = '/static/models/rig.bin'
+
 // ───────────────────────────── 状态
 
 let engine: TryonEngine | null = null
@@ -439,7 +446,7 @@ async function loadMesh() {
   meshLoading.value = true
   meshError.value = ''
   try {
-    await engine.useMeshBody(`/static/models/${state.gender}.obj`)
+    await engine.useMeshBody(RIG_URL)
     useMesh.value = engine.usingMeshBody
   } catch (err) {
     meshError.value = String(err)

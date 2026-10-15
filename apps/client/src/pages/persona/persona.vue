@@ -124,6 +124,13 @@ import { TryonEngine, createH5Platform } from '@cda/tryon-engine'
 import { mountStage, type StageHost } from '@/platform/stage'
 import { store, commitBodyState, restoreBodyState } from '@/store/app-store'
 
+/*
+ * 人偶改用 MakeHuman 官方骨架网格（CC0）。
+ * 骨架资产**两性共用一份** —— 性别本身就是一个形变目标，
+ * 不再像旧的静态 OBJ 那样按性别分文件。
+ */
+const RIG_URL = '/static/models/rig.bin'
+
 const genders = [
   { value: 'male' as const, label: '男性' },
   { value: 'female' as const, label: '女性' },
@@ -229,7 +236,7 @@ async function switchGender(g: Gender): Promise<void> {
   engine?.setBodyProfile(profile.value, 'final')
   // 网格要换成对应性别
   try {
-    await engine?.useMeshBody(`/static/models/${g}.obj`)
+    await engine?.useMeshBody(RIG_URL)
   } catch (err) {
     hint.value = `网格加载失败：${String(err)}`
   }
@@ -267,7 +274,7 @@ async function initEngine(): Promise<void> {
   stage.onResize((w, h) => engine?.resize(w, h))
   engine.start()
   try {
-    await engine.useMeshBody(`/static/models/${state.gender}.obj`)
+    await engine.useMeshBody(RIG_URL)
   } catch (err) {
     hint.value = `网格加载失败：${String(err)}`
   }
@@ -291,7 +298,7 @@ onShow(async () => {
   engine?.setBodyProfile(profile.value, 'final')
   if (state.gender !== prevGender) {
     try {
-      await engine?.useMeshBody(`/static/models/${state.gender}.obj`)
+      await engine?.useMeshBody(RIG_URL)
     } catch (err) {
       hint.value = `网格加载失败：${String(err)}`
     }
