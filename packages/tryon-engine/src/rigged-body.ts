@@ -15,7 +15,7 @@
  */
 import * as THREE from 'three'
 import type { BodyProfile } from '@cda/core'
-import { adiposityFromBmi, createBodyState, deriveProfile } from '@cda/core'
+import { adiposityFromBmi } from '@cda/core'
 import { buildShapeTargets, calibrateShape, type ShapeCalibration } from './body-shape'
 import type { MhTarget, WeightedTarget } from './mh-rig'
 import { applyTargets } from './mh-rig'
@@ -336,13 +336,6 @@ export class RiggedBody implements BodySurface {
     const bmi = profile.weightKg / Math.pow(profile.heightCm / 100, 2)
     const adiposity = adiposityFromBmi(profile.gender, bmi)
 
-    /*
-     * 中性 frame 作为比例的基准：frame 里存的是**绝对值**（cm），
-     * 而形变目标要的是**相对变化**（比中性宽多少、长多少）。
-     * 基准必须与 core 的默认状态同源，否则默认体型一进来就被改掉。
-     */
-    const neutralFrame = frameOf(deriveProfile(createBodyState(profile.gender)))
-
     const input = {
       gender: profile.gender,
       heightCm: profile.heightCm,
@@ -351,13 +344,6 @@ export class RiggedBody implements BodySurface {
       chestCm: profile.chestCm,
       waistCm: profile.waistCm,
       hipCm: profile.hipCm,
-      /*
-       * ⚠️ BodyProfile 上的长度字段是**顶层**的（shoulderWidthCm 等），
-       * 不像 BodyState 那样装在 frame 里。这里显式摊平，
-       * 不要去读 profile.frame —— 那个字段根本不存在。
-       */
-      frame: frameOf(profile),
-      neutralFrame,
     }
     const shape = buildShapeTargets(cal, input, (n) => this.asset.targets.get(n) ?? null)
 
@@ -482,27 +468,5 @@ export class RiggedBody implements BodySurface {
     if (Array.isArray(mat)) mat.forEach((m) => m.dispose())
     else mat.dispose()
     this.object3D.clear()
-  }
-}
-
-/**
- * 把 BodyProfile 的**顶层长度字段**摊平成以名字为键的表。
- *
- * 为什么需要这个函数：BodyProfile 与 BodyState 的字段结构不一样 ——
- *   BodyState  : { frame: { shoulderWidthCm, neckLengthCm, ... } }
- *   BodyProfile: { shoulderWidthCm, neckLengthCm, ... }   ← 顶层
- * 我在这里连错三次（读 profile.adiposity、读 profile.frame、读
- * deriveProfile().frame），每次都表现为「拖滑杆人偶纹丝不动」
- * 而且不报运行时错。集中到一处摊平，以后只有一个地方会错。
- */
-function frameOf(p: BodyProfile): Record<string, number> {
-  return {
-    shoulderWidthCm: p.shoulderWidthCm,
-    neckLengthCm: p.neckLengthCm,
-    torsoLengthCm: p.torsoLengthCm,
-    upperArmCm: p.upperArmCm,
-    forearmCm: p.forearmCm,
-    thighCm: p.thighCm,
-    calfCm: p.calfCm,
   }
 }

@@ -38,41 +38,15 @@ if (!existsSync(join(SRC, 'base.obj'))) {
 }
 
 // ── 解析（与运行时 mh-rig.ts 同逻辑，这里独立实现以免依赖 TS 编译）──
-/**
- * 解析基础网格。
- *
- * ⚠️ **只保留 `body` 组的面**。MakeHuman 的 base.obj 里除了身体还带着
- * 171 个辅助组，共占 27.6% 的面：
- *     body            13378 面 (72.4%)   ← 真正的身体
- *     helper-tights    2650 面 (14.3%)   ← 包住双腿的紧身裤壳
- *     helper-skirt      684 面
- *     helper-hair       198 面
- *     helper-l/r-eye    140 面            ← 眼球
- *     joint-*          ~160 组            ← 关节标记小球
- * 把它们一起渲染出来，人偶身上会糊满肤色小球和一层额外壳体 ——
- * 就是「像个僵尸」的样子。旧的 female.obj 之所以正常，是因为它导出时
- * 已经剔除了这些组（0 个 group）。
- *
- * ⚠️ 但**顶点必须全部保留**：mhskel 的关节是用顶点索引定义的
- * （joint-spine-1 这类辅助组就是关节位置的数据源），删掉顶点会让骨架崩掉。
- * OBJ 里顶点本来就是全局的，g 只分组面，所以「留顶点、剔面」很自然。
- */
 function parseObj(text) {
   const verts = []
   const tris = []
-  let group = null
-  let dropped = 0
   for (const line of text.split('\n')) {
     const c = line.charCodeAt(0)
-    if (c === 103 /* g */) {
-      const sp = line.indexOf(' ')
-      group = sp < 0 ? '' : line.slice(sp + 1).trim()
-    } else if (c === 118 /* v */ && (line.charCodeAt(1) === 32 || line.charCodeAt(1) === 9)) {
+    if (c === 118 /* v */ && (line.charCodeAt(1) === 32 || line.charCodeAt(1) === 9)) {
       const p = line.split(/\s+/)
       verts.push(+p[1], +p[2], +p[3])
     } else if (c === 102 /* f */) {
-      // 只收 body 组的面
-      if (group !== 'body') { dropped++; continue }
       const p = line.split(/\s+/)
       const ix = []
       for (let i = 1; i < p.length; i++) {
@@ -84,7 +58,7 @@ function parseObj(text) {
       for (let i = 1; i < ix.length - 1; i++) tris.push(ix[0], ix[i], ix[i + 1])
     }
   }
-  return { verts, tris, dropped }
+  return { verts, tris }
 }
 
 function parseTarget(text) {
@@ -101,8 +75,7 @@ function parseTarget(text) {
 }
 
 console.log('读取 MakeHuman 资产…')
-const { verts, tris, dropped } = parseObj(readFileSync(join(SRC, 'base.obj'), 'utf8'))
-if (dropped) console.log(`  已剔除 ${dropped} 个辅助几何面（helper-* / joint-*），只保留 body 组`)
+const { verts, tris } = parseObj(readFileSync(join(SRC, 'base.obj'), 'utf8'))
 const nV = verts.length / 3
 const skel = JSON.parse(readFileSync(join(SRC, 'default.mhskel'), 'utf8'))
 const mhw = JSON.parse(readFileSync(join(SRC, 'default_weights.mhw'), 'utf8'))
