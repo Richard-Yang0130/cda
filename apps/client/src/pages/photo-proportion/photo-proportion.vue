@@ -133,9 +133,20 @@ import {
   HEIGHT_RANGE, applyBodyProportionEstimate, estimateBodyProportion,
   hasBlockingIssue, type FrameKey, type ProportionResult, type QualityIssue,
 } from '@cda/core'
+/*
+ * ⚠️ 必须**静态导入**，不能用 `await import('@mediapipe/tasks-vision')`。
+ *
+ * uni-app 的 H5 构建处理「对依赖的动态 import」时会生成畸形的 chunk 路径
+ * （实测得到 `..-node_modules-@mediapipe-tasks-vision-vision_bundle.xxxx.js`
+ * 这种无法解析的模块说明符），页面一跑就报
+ * 「Failed to resolve module specifier」，真机上直接不可用。
+ *
+ * 代价很小：MediaPipe 的 JS 包装只有约 330KB，
+ * 真正大的 30MB 是运行时才去取的 WASM 与模型文件 ——
+ * 那部分无论静态还是动态导入都一样。
+ */
+import { FilesetResolver, PoseLandmarker } from '@mediapipe/tasks-vision'
 import { store, commitBodyState, restoreBodyState } from '@/store/app-store'
-
-const W = window as unknown as { __cdaVision?: boolean }
 
 const FACING = ['正面', '侧面'] as const
 
@@ -228,23 +239,12 @@ function pickPhoto(source: 'camera' | 'album'): void {
   })
 }
 
-/** 动态加载推理库：只有打开这个页面才付出这个体积 */
-async function loadVision(): Promise<any> {
-  if (!W.__cdaVision) {
-    // 同源加载 WASM，避免依赖第三方 CDN 的连通性
-    const mod = await import('@mediapipe/tasks-vision')
-    W.__cdaVision = true
-    return mod
-  }
-  return import('@mediapipe/tasks-vision')
-}
-
 let landmarker: any = null
 
 async function ensureLandmarker(): Promise<any> {
   if (landmarker) return landmarker
   busyText.value = '正在加载识别模型…'
-  const { FilesetResolver, PoseLandmarker } = await loadVision()
+  // 同源加载 WASM 与模型，不依赖任何第三方 CDN
   const fileset = await FilesetResolver.forVisionTasks('/static/vision')
   landmarker = await PoseLandmarker.createFromOptions(fileset, {
     baseOptions: { modelAssetPath: '/static/vision/pose_landmarker_lite.task' },
@@ -348,6 +348,25 @@ onMounted(() => {
   const h = fromUser && fromUser > 0 ? fromUser : store.bodyState.heightCm
   heightText.value = String(h)
   void FACING
+
+  /*
+   * ── 自动化验证用注入口 ──
+   *
+   * 为什么要开这个口子：uni.chooseImage 的文件选择在自动化里驱动不了
+   * （CDP 的 setFileInputFiles 不触发它监听的 change，页面内派发 change
+   * 也无响应）。而最初的端侧用例因此绕过应用自己的导入路径、
+   * 在 page.evaluate 里直接用 CDN 验证 —— **结果漏掉了一个真机必现的 bug**：
+   * 动态 import 被 uni-app 构建成畸形 chunk 路径，页面一跑就崩。
+   *
+   * 所以这里留一个明确的最小注入口：外部若先设置 window.__CDA_DEMO_IMAGE，
+   * 就直接拿它跑**与用户操作完全相同的那条分析链路**。
+   * 它不影响任何正常流程，也不会在无注入时产生任何行为。
+   */
+  const injected = (window as unknown as { __CDA_DEMO_IMAGE?: string }).__CDA_DEMO_IMAGE
+  if (typeof injected === 'string' && injected) {
+    preview.value = injected
+    void analyse(injected)
+  }
 })
 </script>
 
