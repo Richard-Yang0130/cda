@@ -124,8 +124,12 @@ server {
         text/plain text/css text/xml
         application/javascript application/json application/xml
         application/octet-stream
+        application/wasm
         image/svg+xml;
-    # .obj 走的是 application/octet-stream，必须显式包含在上面
+    # .obj / .task 走 application/octet-stream，必须显式包含在上面。
+    # ⚠️ application/wasm 也必须显式列出：端侧人体识别的 WASM 有 12.4MB，
+    #   不压缩的话跨境链路上要多传 8.7MB（gzip 后只有 3.7MB）。
+    #   漏掉它的表现是「功能能用但加载奇慢」，很容易被误判成模型太大。
 
     location / {
         proxy_pass http://127.0.0.1:$PORT;
@@ -134,7 +138,9 @@ server {
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_read_timeout 60s;
+        # 放宽到 300s：端侧推理资产有 12.4MB，跨境链路下 60s 不够
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
     }
 }
 CONF

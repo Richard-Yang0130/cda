@@ -9,7 +9,7 @@
  *   - 跳版本升级时，把中间所有版本的说明一起展示
  */
 
-export const APP_VERSION = '1.0.1'
+export const APP_VERSION = '1.0.2'
 export const APP_NAME = '搭 · CDA'
 
 export interface ReleaseNote {
@@ -29,6 +29,17 @@ export interface ReleaseNote {
  * 避免出现「版本变了但没写说明」的静默升级。
  */
 export const RELEASE_NOTES: ReleaseNote[] = [
+  {
+    version: '1.0.2',
+    date: '2026-10-15',
+    highlights: [
+      '新增：拍一张全身照，自动估算肩宽、躯干与四肢比例 —— 不用再一个个量',
+      '照片只用来估「比例」，三围仍由身高体重推算（单张正面照看不到身体厚度，硬估会不准）',
+      '估算结果可以先看再用，不满意可以自己改，也可以不用',
+      '人偶表面更平滑了：修掉了此前的块状凹陷与棱面',
+      '全身照不会上传服务器，识别全在你手机里完成，只保存算出来的数字',
+    ],
+  },
   {
     version: '1.0.1',
     date: '2026-10-15',
