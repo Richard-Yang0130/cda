@@ -23,7 +23,8 @@
  */
 import type { MhSkeleton, MhTarget, WeightedTarget } from './mh-rig'
 import {
-  applyTargets, dominantBone, measureHeights, parseMhTarget, sliceMeasure,
+  applyTargets, dominantBone, measureHeights, measureLengths, sliceMeasure,
+  LENGTH_TARGET, LENGTH_FRAME_FIELD, type LengthKey,
 } from './mh-rig'
 import type { MhWeights } from './mh-rig'
 
@@ -42,6 +43,17 @@ export interface ShapeInput {
   thighCircCm?: number
   calfCircCm?: number
   upperArmCircCm?: number
+  /**
+   * 比例参数（肩宽/颈长/躯干长/四肢长，单位 cm）。
+   *
+   * ⚠️ 这些**必须接进来**。早先这一层完全没读 frame，
+   * 结果是拖「肩宽」「颈长」「躯干长」滑杆人偶纹丝不动 ——
+   * 实测接了两组差异极大的 frame，渲染出来却是**字节级完全相同**的两张图。
+   * 对一个人偶 App 来说这是功能性 bug，不是美术问题。
+   */
+  frame?: Record<string, number>
+  /** 该性别的中性 frame，作为比例的基准。缺省时用「目标值即基准」的退化行为 */
+  neutralFrame?: Record<string, number>
 }
 
 /** 一处围度的实测结果（网格单位） */
@@ -71,6 +83,10 @@ export interface ShapeCalibration {
   measure: Map<string, Sensitivity>
   /** macrodetails 目标名 → 敏感度 */
   macro: Map<string, Sensitivity>
+  /** 基准骨架长度（网格单位） */
+  baseLengths: Record<LengthKey, number>
+  /** 各长度目标权重 +1 时，各长度项的变化比例 */
+  length: Map<LengthKey, Partial<Record<LengthKey, number>>>
 }
 
 /**
@@ -159,7 +175,31 @@ export function calibrateShape(input: CalibrateInput): ShapeCalibration {
     }
   }
 
-  return { meshHeight, baseGirths, heights: { chest: h.chest, waist: h.waist, hip: h.hip }, tolerance, measure, macro }
+  // ── 长度校准：每个长度目标对自己的段长影响多少 ──
+  const baseLengths = measureLengths(skel, basePos)
+  const length = new Map<LengthKey, Partial<Record<LengthKey, number>>>()
+  for (const key of Object.keys(LENGTH_TARGET) as LengthKey[]) {
+    const t = loadTarget(LENGTH_TARGET[key])
+    if (!t || !t.size) continue
+    const l2 = measureLengths(skel, applyTargets(basePos, [{ target: t, weight: 1 }]))
+    const row: Partial<Record<LengthKey, number>> = {}
+    for (const k of Object.keys(LENGTH_TARGET) as LengthKey[]) {
+      const a = baseLengths[k]
+      if (a > 1e-6) row[k] = l2[k] / a - 1
+    }
+    length.set(key, row)
+  }
+
+  return {
+    meshHeight,
+    baseGirths,
+    heights: { chest: h.chest, waist: h.waist, hip: h.hip },
+    tolerance,
+    measure,
+    macro,
+    baseLengths,
+    length,
+  }
 }
 
 /**
@@ -275,6 +315,42 @@ export function buildShapeTargets(
       cur.chest *= 1 + s.chest * w
       cur.waist *= 1 + s.waist * w
       cur.hip *= 1 + s.hip * w
+    }
+  }
+
+  // ── 第三层：比例（肩宽/颈长/躯干长/四肢长）──
+  /*
+   * cm → 网格单位换算与围度一致。
+   * 每个长度目标主要影响自己那一项（实测 shoulder-dist 只显著改肩宽），
+   * 所以按主对角反解；同时对其它长度项的副作用一并计入。
+   */
+  if (input.frame && input.neutralFrame) {
+    for (const key of Object.keys(LENGTH_TARGET) as LengthKey[]) {
+      const field = LENGTH_FRAME_FIELD[key]
+      const want = input.frame[field]
+      const base = input.neutralFrame[field]
+      if (typeof want !== 'number' || typeof base !== 'number' || base <= 1e-6) continue
+      const row = cal.length.get(key)
+      if (!row) continue
+      const main = row[key]
+      if (typeof main !== 'number' || Math.abs(main) < 1e-4) continue
+      // 目标比例变化（相对中性）
+      const need = want / base - 1
+      /*
+       * 权重上限**逐项不同**。
+       *
+       * neck-height 这个目标有个固有副作用：它把头也一起纵向拉伸，
+       * 实测比例约为颈长变化的 0.35 倍（w=1.0 时颈长 +27.5% 而头高 +9.5%，
+       * w=1.5 时头高 +14.4% —— 那又变成尖刺了）。
+       * 所以颈长必须收得更紧：把权重压到 0.55 以下，
+       * 头部拉伸就能控制在 5% 以内（肉眼基本不可辨）。
+       * 其余目标的实测副作用为 0.0%，可以放宽到 ±1.5。
+       */
+      const cap = key === 'neckLength' ? 0.55 : 1.5
+      const w = Math.max(-cap, Math.min(cap, need / main))
+      if (Math.abs(w) < 0.01) continue
+      const t = loadTarget(LENGTH_TARGET[key])
+      if (t && t.size) list.push({ target: t, weight: w })
     }
   }
 

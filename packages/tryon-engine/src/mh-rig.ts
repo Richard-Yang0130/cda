@@ -266,6 +266,96 @@ export function parseObjFaces(text: string): number[] {
  */
 export type MhTarget = Map<number, [number, number, number]>
 
+// ────────────────────────────────────────────────────────────
+// 长度测量（从骨架推导）
+// ────────────────────────────────────────────────────────────
+
+/** 可由骨架直接量出的长度项。与 BodyProfile.frame 的字段一一对应 */
+export type LengthKey =
+  | 'shoulderWidth' | 'neckLength' | 'torsoLength'
+  | 'upperArm' | 'forearm' | 'thigh' | 'calf'
+
+/** 长度项 ↔ 对应的 MakeHuman measure 目标名 */
+export const LENGTH_TARGET: Record<LengthKey, string> = {
+  shoulderWidth: 'measure-shoulder-dist-incr',
+  neckLength: 'measure-neck-height-incr',
+  torsoLength: 'measure-napetowaist-dist-incr',
+  upperArm: 'measure-upperarm-length-incr',
+  forearm: 'measure-lowerarm-length-incr',
+  thigh: 'measure-upperleg-height-incr',
+  calf: 'measure-lowerleg-height-incr',
+}
+
+/** 长度项 ↔ BodyProfile.frame 里的字段名 */
+export const LENGTH_FRAME_FIELD: Record<LengthKey, string> = {
+  shoulderWidth: 'shoulderWidthCm',
+  neckLength: 'neckLengthCm',
+  torsoLength: 'torsoLengthCm',
+  upperArm: 'upperArmCm',
+  forearm: 'forearmCm',
+  thigh: 'thighCm',
+  calf: 'calfCm',
+}
+
+/**
+ * 从骨架推导出各部位的**长度**（网格单位）。
+ *
+ * 为什么用骨骼量而不是量网格包围盒：
+ *   长度就是关节到关节的距离，而骨骼正是按这个意义定义的
+ *   （关节 = 一组顶点的质心）。量网格会把姿势、手臂外张等因素混进来，
+ *   量骨骼则直接得到解剖学意义上的段长。
+ *
+ * ⚠️ 左右取平均：两侧不一致时（姿势歪斜）取平均比取单侧稳。
+ */
+export function measureLengths(
+  skel: MhSkeleton,
+  pos: Float32Array,
+): Record<LengthKey, number> {
+  const at = (n: string): THREE.Vector3 | null => {
+    const def = skel.bones[n]
+    if (!def) return null
+    return jointPosition(def.head, skel, pos)
+  }
+  const d = (a: string, b: string): number | null => {
+    const pa = at(a)
+    const pb = at(b)
+    return pa && pb ? pa.distanceTo(pb) : null
+  }
+  const pair = (l: string, r: string, a: string, b: string): number => {
+    const dl = d(l, a)
+    const dr = d(r, b)
+    if (dl !== null && dr !== null) return (dl + dr) / 2
+    return dl ?? dr ?? 0
+  }
+
+  /*
+   * 肩宽：量**臂根**（upperarm01）之间的距离，不是肩关节（shoulder01）。
+   *
+   * 实测依据：MakeHuman 的 measure-shoulder-dist 目标**完全不移动**
+   * shoulder01 与 clavicle（位移 0.0%），它把 upperarm01 外移 14.8%。
+   * 早先量 shoulder01 间距，于是「拖肩宽滑杆人偶毫无反应」——
+   * 不是目标没生效，是我量错了地方。
+   */
+  const shoulderWidth = (() => {
+    const l = at('upperarm01.L')
+    const r = at('upperarm01.R')
+    if (l && r) return l.distanceTo(r)
+    const sl = at('shoulder01.L')
+    const sr = at('shoulder01.R')
+    return sl && sr ? sl.distanceTo(sr) : 0
+  })()
+
+  return {
+    shoulderWidth,
+    neckLength: d('neck01', 'head') ?? 0,
+    torsoLength: d('spine05', 'neck01') ?? 0,
+    upperArm: pair('upperarm01.L', 'upperarm01.R', 'lowerarm01.L', 'lowerarm01.R'),
+    forearm: pair('lowerarm01.L', 'lowerarm01.R', 'wrist.L', 'wrist.R'),
+    thigh: pair('upperleg01.L', 'upperleg01.R', 'lowerleg01.L', 'lowerleg01.R'),
+    calf: pair('lowerleg01.L', 'lowerleg01.R', 'lowerleg02.L', 'lowerleg02.R'),
+  }
+}
+
 export function parseMhTarget(text: string): MhTarget {
   const out: MhTarget = new Map()
   for (const line of text.split('\n')) {
