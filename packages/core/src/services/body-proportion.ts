@@ -437,13 +437,12 @@ export interface ApplyOptions {
   /** 低于该置信度的字段保留原值。默认 0.5 —— 宁可少改，不可改错 */
   minConfidence?: number
   /**
-   * 安全余量（0..0.5）：把写入值限制在模型区间的**内侧**，不贴边。
+   * 安全余量（0..0.5）：把**已知几何瑕疵字段**的写入值限制在区间内侧。
    *
-   * 为什么需要：网格重拟合在各段参数的极值附近会出现可见的几何瑕疵
-   * （头顶尖刺，详见 body-proportion 的说明与项目记录）。
-   * 那是重拟合算法的既有问题，与本模块无关，但照片估算**很容易**
-   * 把颈长/躯干长直接顶到上限 —— 实测就是这么发生的。
-   * 收进内侧既避开瑕疵，也不损失实际精度（几毫米的差别看不出来）。
+   * 只作用于 SPIKE_PRONE 里的字段，理由见那里的说明。
+   * 绝不施加到肩宽、四肢长等测量可靠的字段上 —— 那会篡改真实测量值：
+   * 实测肩宽 34.1cm（区间下限是 34）一旦按 15% 收缩会被抬到 36.7cm，
+   * 白白损失 2.6cm 精度，用户会觉得「数据不准了」。
    */
   safeMargin?: number
 }
@@ -464,6 +463,18 @@ export interface ApplyReport {
  *   3. **不碰 adiposity / build** —— 那是体脂与形体风格，照片给不出可靠结论；
  *      围度继续由身高体重的先验模型决定。
  */
+/**
+ * 极值附近已知有可见几何瑕疵的字段。
+ *
+ * 网格重拟合在颈长/躯干长的极值处会拉扯头部（头顶尖刺），
+ * 实测 torsoLengthCm=58 时头颈顶点位移 107mm、neckLengthCm=15 时 33mm。
+ * 那是重拟合算法的既有问题，成因已记录但尚未修好，所以这里先避开。
+ *
+ * 其余字段（肩宽、各段长度）在极值处没有观察到类似瑕疵，
+ * **不加余量**，以免牺牲测量精度。
+ */
+const SPIKE_PRONE: ReadonlySet<FrameKey> = new Set<FrameKey>(['neckLengthCm', 'torsoLengthCm'])
+
 export function applyBodyProportionEstimate(
   current: BodyState,
   est: ProportionResult,
@@ -481,15 +492,17 @@ export function applyBodyProportionEstimate(
       continue
     }
     /*
-     * 先收进安全区间，再交给 setFrame 统一夹紧。
-     * 用「向区间中点收缩」而不是简单截断：截断会让结果长期贴在边界上，
-     * 收缩则保持值本身的可辨识度，且离边界越近收缩越多。
+     * 只对已知有几何瑕疵的字段收进安全区间，再交给 setFrame 统一夹紧。
+     * 用「向区间内侧收缩」而不是简单截断：截断会让结果长期贴在边界上。
      */
     const range = FRAME_RANGES[f.key]
-    const span = range.max - range.min
-    const lo = range.min + span * margin
-    const hi = range.max - span * margin
-    const v = Math.min(hi, Math.max(lo, f.clampedCm))
+    let v = f.clampedCm
+    if (SPIKE_PRONE.has(f.key)) {
+      const span = range.max - range.min
+      const lo = range.min + span * margin
+      const hi = range.max - span * margin
+      v = Math.min(hi, Math.max(lo, v))
+    }
     next = setFrame(next, f.key, v)
     applied.push(f.key)
   }

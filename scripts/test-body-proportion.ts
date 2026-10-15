@@ -280,6 +280,14 @@ function synthPose(opts: {
   const tRange = FRAME_RANGES.torsoLengthCm
   ck('★ 颈长不会贴在模型上限（留出安全余量）', neck < nRange.max - 0.01, `${neck} < ${nRange.max}`)
   ck('★ 躯干长不会贴在模型上限（留出安全余量）', torso < tRange.max - 0.01, `${torso} < ${tRange.max}`)
+  /*
+   * ⚠️ 安全余量**不得**波及测量可靠的字段。
+   * 曾经对所有字段一律收缩，结果肩宽 34.1（区间下限 34）被抬到 36.7，
+   * 白白损失 2.6cm 精度 —— 用户会觉得「数据不准了」。
+   */
+  ck('★ 肩宽不因安全余量被篡改（保持测量值）',
+    Math.abs(out.state.frame.shoulderWidthCm - forced.frames.find((f) => f.key === 'shoulderWidthCm')!.clampedCm) < 0.05,
+    `${out.state.frame.shoulderWidthCm}`)
 }
 
 // ── ⑨ 身高区间：应用时不得越界 ──
