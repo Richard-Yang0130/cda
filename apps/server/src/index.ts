@@ -1007,6 +1007,17 @@ const MIME: Record<string, string> = {
   // 3D 网格是二进制大文件，必须给对类型并允许长缓存
   '.obj': 'application/octet-stream',
   '.glb': 'model/gltf-binary',
+  '.webp': 'image/webp',
+  /*
+   * ⚠️ WASM 必须是 application/wasm。
+   * 给成 application/octet-stream 时，浏览器会拒绝
+   * WebAssembly.instantiateStreaming（它按 MIME 决定能否流式编译），
+   * 表现为端侧推理模型加载失败 —— 而静态文件本身明明返回 200，
+   * 排查时很容易误以为是模型或路径的问题。
+   */
+  '.wasm': 'application/wasm',
+  // MediaPipe 的模型包（按 arrayBuffer 读取，octet-stream 即可）
+  '.task': 'application/octet-stream',
 }
 
 function serveStatic(pathname: string, res: ServerResponse): void {

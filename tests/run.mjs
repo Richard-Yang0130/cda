@@ -18,11 +18,47 @@
  */
 import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, rmSync, mkdirSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { TESTS, LEVELS, testsForImpacts, testsForLevels } from './manifest.mjs'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
+
+/*
+ * 用 TypeScript 写测试时不能直接 node 跑：
+ * Node 的类型擦除能处理语法，但**解析不了无扩展名的导入**
+ * （core 包内部大量 `from './types'`），会报 ERR_MODULE_NOT_FOUND。
+ * 所以 .ts 测试先用 esbuild 打成单文件再执行 —— 这样测试代码可以用
+ * 类型、可以 import 工作区源码，而运行器对 .mjs 的行为完全不变。
+ */
+let ESBUILD = null
+function findEsbuild() {
+  if (ESBUILD !== null) return ESBUILD
+  try {
+    const r = spawnSync('bash', ['-c',
+      'find node_modules/.pnpm -maxdepth 5 -type f -name esbuild -path "*bin*" 2>/dev/null | head -1'],
+      { cwd: ROOT, encoding: 'utf8' })
+    ESBUILD = (r.stdout ?? '').trim() || false
+  } catch {
+    ESBUILD = false
+  }
+  return ESBUILD
+}
+
+/** .ts → 临时 .mjs；.mjs 原样返回 */
+function prepareScript(file) {
+  if (!file.endsWith('.ts')) return file
+  const esb = findEsbuild()
+  if (!esb) throw new Error('找不到 esbuild，无法运行 TypeScript 测试')
+  const out = join(tmpdir(), `cda-test-${file.replace(/[^a-zA-Z0-9]/g, '_')}.mjs`)
+  const r = spawnSync(esb, [file, '--bundle', '--format=esm', '--platform=node',
+    `--outfile=${out}`, '--log-level=error'], { cwd: ROOT, encoding: 'utf8' })
+  if (r.status !== 0) {
+    throw new Error(`打包失败：${(r.stderr ?? '').slice(0, 300)}`)
+  }
+  return out
+}
 const PORT = Number(process.env.CDA_PORT ?? 8899)
 const BASE = `http://127.0.0.1:${PORT}`
 const ADMIN_USER = 'admin'
@@ -169,7 +205,15 @@ async function main() {
       }
     }
     const t0 = Date.now()
-    const r = spawnSync('node', [t.file], {
+    let script
+    try {
+      script = prepareScript(t.file)
+    } catch (e) {
+      log(`   ${C.red}✗ ${e.message}${C.reset}\n`)
+      results.push({ t, pass: false, ms: 0, sum: '打包失败' })
+      continue
+    }
+    const r = spawnSync('node', [script], {
       cwd: ROOT,
       env: { ...process.env, CDA_API: BASE, CDA_BASE: BASE, CDA_ADMIN_USER: ADMIN_USER, CDA_ADMIN_PASS: ADMIN_PASS },
       encoding: 'utf8',

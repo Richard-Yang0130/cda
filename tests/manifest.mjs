@@ -101,6 +101,37 @@ export const TESTS = [
     impacts: ['register', 'profile', 'avatar', 'post', 'api', 'security'],
   },
 
+  {
+    file: 'scripts/test-body-proportion.ts',
+    level: 'L1',
+    module: '照片估算',
+    runner: 'none',
+    covers: [
+      '关键点比例换算（肩宽/躯干/四肢，误差 <8%）',
+      '尺度无关：人物远近不影响结果',
+      '拒绝类：无人 / 多人 / 人太小 / 身高越界',
+      '告警类：侧身 / 手臂贴身',
+      '超范围值被夹紧并下调置信度',
+      '应用时只改 frame，不动体脂与形体风格',
+      '低置信字段保留原值（不覆盖用户设置）',
+    ],
+    impacts: ['body', 'photo', 'core'],
+  },
+  {
+    file: 'scripts/test-photo-proportion.mjs',
+    level: 'L3',
+    module: '照片估算-端侧',
+    runner: 'browser',
+    covers: [
+      '页面可打开、隐私提示与能力边界在首屏',
+      '身高越界有明确提示',
+      'WASM 同源编译（MIME 正确）',
+      '模型加载并对真实照片产出 33 个关键点与分割掩膜',
+      '推理耗时在可接受范围',
+    ],
+    impacts: ['photo', 'page', 'frontend', 'perf'],
+  },
+
   // ── L2 安全设计 ──
   {
     file: 'scripts/test-admin.mjs',

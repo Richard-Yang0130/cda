@@ -14,7 +14,6 @@
  * 变动的只有围度与身高 —— 正是「同一个人变胖变瘦」应有的效果。
  */
 import * as THREE from 'three'
-import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js'
 import { createBodyState, deriveProfile, type BodyProfile } from '@cda/core'
 
 /**
@@ -157,35 +156,78 @@ function median(a: number[]): number {
 }
 
 /**
- * 从 OBJ 文本构建顶点邻接表。
+ * 把 OBJ 文本解析成**索引式**几何，并顺手构建与之一致的顶点邻接表。
  *
- * 为什么要邻接表：蒙皮权重必须在**网格拓扑**上扩散平滑，
- * 而不是按空间距离硬分。几何位置相近不代表属于同一体段
- * （例如腋下、胯下），只有沿网格表面扩散才能得到连续、无跳变的权重。
+ * ── 为什么不能用 OBJLoader ──
+ * OBJLoader 会把面展开成**非索引三角汤**（顶点数 = 面数 × 3）。这同时毁掉两件事：
+ *
+ *   1. **表面变成碎面。**
+ *      `computeVertexNormals()` 在非索引几何上只能给出「每面一个法线」，
+ *      于是整个身体呈现棱面状 —— 正是用户反馈的「身体会有凹陷、不够平滑」。
+ *      实测几何本身在中性参数下位移为 0.00mm，**纯粹是着色问题**。
+ *
+ *   2. **权重扩散平滑被静默跳过。**
+ *      `buildAdjacency` 按 OBJ 的顶点索引建表（13514），
+ *      而几何顶点是 27024，于是 `adj.length === nV` 不成立，
+ *      setProfile 里那段拓扑扩散**从来没有运行过**。
+ *
+ * 自己解析可以保证几何索引、邻接表、权重数组三者严格对齐。
  */
-function buildAdjacency(objText: string): number[][] {
+function parseIndexedObj(text: string): { geometry: THREE.BufferGeometry; adj: number[][] } {
+  const verts: number[] = []
+  const tris: number[] = []
   const sets: Array<Set<number> | undefined> = []
-  const push = (a: number, b: number) => {
+
+  const link = (a: number, b: number) => {
     ;(sets[a] ??= new Set()).add(b)
     ;(sets[b] ??= new Set()).add(a)
   }
-  for (const line of objText.split('\n')) {
-    if (line.charCodeAt(0) !== 102 /* f */) continue
-    const parts = line.split(/\s+/)
-    const idx: number[] = []
-    for (let i = 1; i < parts.length; i++) {
-      const t = parts[i]
-      if (!t) continue
-      const slash = t.indexOf('/')
-      idx.push(parseInt(slash < 0 ? t : t.slice(0, slash), 10) - 1)
-    }
-    for (let i = 1; i < idx.length - 1; i++) {
-      push(idx[0]!, idx[i]!)
-      push(idx[i]!, idx[i + 1]!)
-      push(idx[0]!, idx[i + 1]!)
+
+  for (const line of text.split('\n')) {
+    if (line.length < 2) continue
+    const c0 = line.charCodeAt(0)
+    if (c0 === 118 /* v */) {
+      // 跳过 vn / vt：它们也以 v 开头，但第二个字符不是空格
+      if (line.charCodeAt(1) !== 32 && line.charCodeAt(1) !== 9) continue
+      const p = line.split(/\s+/)
+      verts.push(Number(p[1]), Number(p[2]), Number(p[3]))
+    } else if (c0 === 102 /* f */) {
+      const p = line.split(/\s+/)
+      const idx: number[] = []
+      for (let i = 1; i < p.length; i++) {
+        const t = p[i]
+        if (!t) continue
+        const slash = t.indexOf('/')
+        idx.push(parseInt(slash < 0 ? t : t.slice(0, slash), 10) - 1)
+      }
+      // 扇形三角化，同时建邻接（与几何用的是同一份面数据）
+      for (let i = 1; i < idx.length - 1; i++) {
+        const a = idx[0]!
+        const b = idx[i]!
+        const c = idx[i + 1]!
+        tris.push(a, b, c)
+        link(a, b)
+        link(b, c)
+        link(a, c)
+      }
     }
   }
-  return sets.map((x) => (x ? [...x] : []))
+
+  const geometry = new THREE.BufferGeometry()
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3))
+  geometry.setIndex(tris)
+
+  /*
+   * 邻接表长度必须**严格等于**顶点数。
+   * sets 是稀疏数组，末尾若有没有被任何面引用的孤立顶点，
+   * sets.length 会短于顶点数 —— 那样 `adj.length === nV` 又会不成立，
+   * 扩散会被再次静默跳过。这里显式补齐，把这个隐患从根上掐掉。
+   */
+  const nV = verts.length / 3
+  const adj: number[][] = new Array(nV)
+  for (let i = 0; i < nV; i++) adj[i] = sets[i] ? [...sets[i]!] : []
+
+  return { geometry, adj }
 }
 
 export class MeshBody implements BodySurface {
@@ -262,8 +304,9 @@ export class MeshBody implements BodySurface {
     const res = await fetch(url)
     if (!res.ok) throw new Error(`[CDA] 网格加载失败 ${res.status}: ${url}`)
     const text = await res.text()
-    const obj = new OBJLoader().parse(text)
-    return new MeshBody(obj, profile, { url, gender }, buildAdjacency(text))
+    // 索引式几何：既保证平滑法线，也让邻接表与顶点数对齐
+    const { geometry, adj } = parseIndexedObj(text)
+    return new MeshBody(new THREE.Mesh(geometry), profile, { url, gender }, adj)
   }
 
     // ────────────────────────────────────────────────────────
@@ -389,6 +432,16 @@ export class MeshBody implements BodySurface {
     const i1 = Math.min(seg.refR.length - 1, i0 + 1)
     const fr = fi - i0
     const r = (seg.refR[i0]! * (1 - fr) + seg.refR[i1]! * fr) || 1e-4
+
+    /*
+     * ⚠️ 不要在这里加「超出段端点的距离惩罚」。
+     *
+     * 看起来很有道理（t 被夹紧后段外顶点仍按端点评分，头会被躯干拽走），
+     * 但**实测适得其反**：加上之后头顶点改判给了别的段，
+     * 整个头被拉成锥形，比不加时明显更糟（见开发记录里的对比渲染）。
+     *
+     * 头颈尖刺的成因尚未定位，保留原评分方式。
+     */
     return { score: perp.length() / Math.max(r, 1e-4), t, tRaw, perp }
   }
 
@@ -648,7 +701,18 @@ export class MeshBody implements BodySurface {
     }
 
     // ── 2) 沿网格边扩散平滑 ──
-    if (this.adj.length === nV) {
+    /*
+     * 这里**必须显式失败**，不能静默跳过。
+     * 原先写成 `if (this.adj.length === nV)`，而几何是非索引的（顶点 27024）
+     * 邻接表却按 OBJ 索引建（13514），条件不成立 ——
+     * 于是这段权重扩散平滑**从来没有运行过**，却毫无提示。
+     * 几何与邻接表现在由同一个解析器产出，正常情况必然相等；
+     * 若不相等说明加载路径被改坏了，应该立刻暴露而不是悄悄降级。
+     */
+    if (this.adj.length !== nV) {
+      throw new Error(`[CDA] 邻接表与顶点数不一致（adj=${this.adj.length}, nV=${nV}）：权重平滑会被跳过，拒绝继续`)
+    }
+    {
       const tmp = new Float32Array(W.length)
       const ITER = 6
       const LAMBDA = 0.5
@@ -737,8 +801,8 @@ export class MeshBody implements BodySurface {
 
   /** 从 OBJ 文本构建（审计脚本在 Node 里用，避免依赖 fetch 与浏览器） */
   static loadFromText(text: string, profile: BodyProfile, gender: 'male' | 'female'): MeshBody {
-    const obj = new OBJLoader().parse(text)
-    return new MeshBody(obj, profile, { url: '(inline)', gender }, buildAdjacency(text))
+    const { geometry, adj } = parseIndexedObj(text)
+    return new MeshBody(new THREE.Mesh(geometry), profile, { url: '(inline)', gender }, adj)
   }
 
   /** 变形后的顶点坐标（审计脚本用来做几何检测） */
