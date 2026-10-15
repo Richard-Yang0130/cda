@@ -71,7 +71,13 @@ const b = await puppeteer.launch({
     '--no-sandbox', '--disable-gpu',
     '--enable-unsafe-swiftshader',
     '--disable-crash-reporter', '--disable-breakpad',
-    '--user-data-dir=/tmp/cda-photo-test',
+    /*
+     * ⚠️ 每次运行用独立目录。
+     * 复用同一个 user-data-dir 会让上一轮写入的 cda.bodyState.v1 残留，
+     * 于是「应用后状态被写入」这条断言因为 before === after 而假失败 ——
+     * 明明写入成功了。测试隔离不做干净，就会浪费时间去查不存在的问题。
+     */
+    `--user-data-dir=/tmp/cda-photo-test-${Date.now()}`,
   ],
 })
 
@@ -154,14 +160,25 @@ if (state?.rows.length) {
 // ── 应用到人偶 ──
 const before = await p.evaluate(() => localStorage.getItem('cda.bodyState.v1'))
 const clicked = await p.evaluate(() => {
+  // 文案现在是「应用到人偶（N 项）」，所以用前缀匹配而不是全等 ——
+  // 之前用全等，按钮文案一改就整段断言被静默跳过，还报全绿。
   const n = [...document.querySelectorAll('uni-view,uni-text,div,span')]
-    .filter((e) => e.textContent.trim() === '应用到人偶')
+    .filter((e) => e.textContent.trim().startsWith('应用到人偶'))
   if (!n.length) return false
   n[n.length - 1].dispatchEvent(new MouseEvent('click', { bubbles: true }))
   return true
 })
 await new Promise((r) => setTimeout(r, 1500))
 const after = await p.evaluate(() => localStorage.getItem('cda.bodyState.v1'))
+
+/*
+ * ⚠️ 这里**不能写成 if (有结果) { 断言 }**。
+ * 一旦前置条件不成立就整段跳过，测试会以更少的断言数报「全绿」，
+ * 覆盖面积悄悄缩水 —— 刚才把按钮文案改掉时就发生了这件事。
+ * 所以：有结果却点不到按钮 = 失败，必须显式暴露。
+ */
+ck('★ 有结果时「应用」按钮可点击', !state?.rows.length ? true : clicked,
+   state?.rows.length ? (clicked ? '' : '找不到按钮，文案可能变了') : '无结果，跳过')
 
 if (state?.rows.length && clicked) {
   ck('★ 应用后本地人偶状态被写入', !!after && after !== before)
@@ -173,6 +190,50 @@ if (state?.rows.length && clicked) {
        typeof st.adiposity === 'number' && st.adiposity >= 0 && st.adiposity <= 1, `${st.adiposity}`)
     ck('身高被保留（本用例身高取自人偶现值）',
        typeof st.heightCm === 'number' && st.heightCm > 100 && st.heightCm < 220, `${st.heightCm}`)
+  }
+}
+
+// ══ 三、应用后到人偶页确认真的变了 ══
+/*
+ * 这一段是被用户反馈逼出来的：他说「数据没有应用到我的人偶」。
+ * 可能的原因是「应用按钮被置灰且无反馈」，也可能是「人偶页没有刷新」，
+ * 还可能是「个人主页只显示三围，而照片按设计不改三围，看起来没变化」。
+ * 三种都要在自动化里堵住，否则下次还会以同样的形式回来。
+ */
+if (state?.rows.length && clicked) {
+  await p.goto(`${BASE}/#/pages/persona/persona`, { waitUntil: 'networkidle2', timeout: 90000 })
+  await new Promise((r) => setTimeout(r, 6000))
+  const personaText = await txt()
+  const shoulderRow = state.rows.find((r) => r.name === '肩宽')
+  const shown = shoulderRow ? personaText.includes(String(shoulderRow.val)) : false
+  ck('★ 人偶页刷新后显示照片估出的数值（不是旧值）', shown,
+     shoulderRow ? `期望出现 ${shoulderRow.val}` : '无肩宽行')
+
+  /*
+   * 个人主页的「我的人偶」卡片必须能体现比例类修改。
+   * ⚠️ 那个页面有登录守卫（NavShell），未登录会被踢到登录页，
+   * 断言会失败在完全无关的原因上。所以先注册一个账号并注入登录态。
+   */
+  const reg = await fetch(`${BASE}/api/auth/register`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      inviteCode: 'POC-01', password: 'pw123456', nickname: '照片用例',
+      phone: '139' + String(Date.now()).slice(-8), gender: 'female', birthday: '1995-06-15',
+    }),
+  }).then((r) => r.json()).catch(() => ({}))
+
+  if (!reg?.token) {
+    ck('★ 个人主页的人偶卡片显示肩宽（比例修改可见）', false, '前置注册失败，无法验证')
+  } else {
+    await p.evaluate((t, u) => {
+      localStorage.setItem('cda.token.v1', t)
+      localStorage.setItem('cda.user.v1', u)
+    }, reg.token, JSON.stringify(reg.user))
+    await p.goto(`${BASE}/#/pages/profile/profile`, { waitUntil: 'networkidle2', timeout: 90000 })
+    await new Promise((r) => setTimeout(r, 5000))
+    const profileText = await txt()
+    ck('★ 个人主页的人偶卡片显示肩宽（比例修改可见）',
+       /肩\s*\d/.test(profileText), (profileText.match(/肩[^\s]*/) ?? [''])[0])
   }
 }
 

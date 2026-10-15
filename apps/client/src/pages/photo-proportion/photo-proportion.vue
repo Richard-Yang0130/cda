@@ -25,6 +25,18 @@
       </text>
     </view>
 
+    <!-- 后台预加载进度：让等待可感知，而不是像卡住 -->
+    <view v-if="preloadPct >= 0 && preloadPct < 1" class="preload">
+      <view class="pl-row">
+        <text class="pl-t">正在后台准备识别模型</text>
+        <text class="pl-p">{{ Math.round(preloadPct * 100) }}%</text>
+      </view>
+      <view class="pl-bar"><view class="pl-in" :style="{ width: Math.round(preloadPct * 100) + '%' }" /></view>
+      <text class="pl-s">
+        首次使用需下载约 10MB，只需这一次。你可以先往下填身高、拍好照片，下载会同时在跑。
+      </text>
+    </view>
+
     <!-- 第一步：身高 -->
     <text class="group">1 · 你的真实身高</text>
     <text class="hint">
@@ -99,8 +111,14 @@
 
       <text class="summary">综合可信度 {{ Math.round(result.confidence * 100) }}%</text>
 
-      <view class="apply" :class="{ dis: !rows.length }" @click="apply">
-        <text>{{ applying ? '应用中…' : '应用到人偶' }}</text>
+      <!-- 没测出来的字段要说清楚，否则用户以为「怎么只改了几项」 -->
+      <view v-if="skipped.length" class="skipped">
+        <text class="sk-t">这几项没测出来（照片里看不清或置信度过低），会保留你原来的设置：</text>
+        <text class="sk-s">{{ skipped.map((f) => LABEL[f.key]).join('、') }}</text>
+      </view>
+
+      <view class="apply" :class="{ empty: !rows.length }" @click="apply">
+        <text>{{ applying ? '应用中…' : rows.length ? `应用到人偶（${rows.length} 项）` : '没有可应用的数据' }}</text>
       </view>
       <text class="apply-note">
         只修改人偶的比例（肩宽、躯干、四肢长度）。体脂与围度保持不变，
@@ -165,6 +183,9 @@ const heightText = ref('')
 const preview = ref('')
 const busy = ref(false)
 const busyText = ref('')
+/** 预加载进度 0..1；-1 表示尚未开始 */
+const preloadPct = ref(-1)
+const preloadNote = ref('')
 const fatal = ref('')
 const result = ref<ProportionResult | null>(null)
 const applying = ref(false)
@@ -190,6 +211,11 @@ const rows = computed(() =>
   (result.value?.frames ?? [])
     .filter((f) => f.confidence >= MIN_CONF)
     .map((f) => ({ ...f, label: LABEL[f.key] })),
+)
+
+/** 置信度不足、不会被写入的字段 —— 要在界面上说明白，而不是默默丢掉 */
+const skipped = computed(() =>
+  (result.value?.frames ?? []).filter((f) => f.confidence < MIN_CONF),
 )
 
 const heightError = computed(() => {
@@ -240,10 +266,74 @@ function pickPhoto(source: 'camera' | 'album'): void {
 }
 
 let landmarker: any = null
+let preloadPromise: Promise<void> | null = null
+
+/**
+ * 后台预加载推理资产。
+ *
+ * 为什么要预加载：首次要下载约 9.8MB（WASM 3.9MB + 模型 5.8MB）。
+ * 跨境链路上这要几十秒 —— 但用户**读拍摄说明、摆姿势、拍照**本身
+ * 也要几十秒。把下载放在这段时间里跑，等他选完图模型已经就绪，
+ * 感知上的等待几乎消失。这比压缩体积更有效，因为模型本身压不动
+ * （TFLite 的 float16 权重只有约 14% 的压缩空间）。
+ *
+ * 用 fetch 拉一遍即可进入 HTTP 缓存；MediaPipe 之后的请求会命中缓存。
+ * 失败不影响正常流程 —— 用户真去选图时会再试一次并给出明确报错。
+ */
+const PRELOAD_FILES = [
+  '/static/vision/vision_wasm_internal.wasm',
+  '/static/vision/pose_landmarker_lite.task',
+]
+
+function preloadAssets(): Promise<void> {
+  if (preloadPromise) return preloadPromise
+  preloadPromise = (async () => {
+    try {
+      // 先问一下文件总大小，用于算进度；失败就退化成不确定进度
+      let total = 0
+      for (const f of PRELOAD_FILES) {
+        try {
+          const h = await fetch(f, { method: 'HEAD' })
+          total += Number(h.headers.get('content-length') ?? 0)
+        } catch { /* 忽略 */ }
+      }
+      let done = 0
+      preloadPct.value = total > 0 ? 0 : -1
+      for (const f of PRELOAD_FILES) {
+        const res = await fetch(f)
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const len = Number(res.headers.get('content-length') ?? 0)
+        const reader = res.body?.getReader()
+        if (reader) {
+          // 逐块读，才能给出真实百分比 —— 否则用户只觉得「卡住了」
+          for (;;) {
+            const { done: fin, value } = await reader.read()
+            if (fin) break
+            done += value?.length ?? 0
+            if (total > 0) preloadPct.value = Math.min(1, done / total)
+          }
+        } else {
+          await res.arrayBuffer()
+          done += len
+          if (total > 0) preloadPct.value = Math.min(1, done / total)
+        }
+      }
+      preloadPct.value = 1
+    } catch {
+      preloadPct.value = -1
+    }
+  })()
+  return preloadPromise
+}
 
 async function ensureLandmarker(): Promise<any> {
   if (landmarker) return landmarker
-  busyText.value = '正在加载识别模型…'
+  // 若预加载还没完成，等它 —— 多数情况下这时已经下好了
+  if (preloadPromise && preloadPct.value >= 0 && preloadPct.value < 1) {
+    busyText.value = '正在准备识别模型…'
+  }
+  await preloadPromise?.catch(() => {})
+  busyText.value = '正在初始化识别模型…'
   // 同源加载 WASM 与模型，不依赖任何第三方 CDN
   const fileset = await FilesetResolver.forVisionTasks('/static/vision')
   landmarker = await PoseLandmarker.createFromOptions(fileset, {
@@ -328,13 +418,33 @@ async function analyse(path: string): Promise<void> {
 
 function apply(): void {
   const r = result.value
-  if (!r || applying.value || !rows.value.length) return
+  if (!r || applying.value) return
+  /*
+   * 没有任何可用字段时必须**明确说明原因**。
+   * 之前的实现是「按钮置灰 + 点击直接 return」——用户点了没反应，
+   * 会以为是功能坏了（实际反馈里就出现了「数据没有应用到人偶」）。
+   * 置灰只能表达「现在不行」，不能表达「为什么不行」。
+   */
+  if (!rows.value.length) {
+    uni.showModal({
+      title: '没有可应用的数据',
+      content: skipped.value.length
+        ? `测出了 ${skipped.value.length} 项，但置信度都太低（照片里看不清或角度不好）。建议换一张正面全身照重拍。`
+        : '这张照片没能测出任何比例。请确认拍到了完整全身、正对镜头，并且只站一个人。',
+      showCancel: false,
+    })
+    return
+  }
   applying.value = true
   const report = applyBodyProportionEstimate(store.bodyState, r, { minConfidence: MIN_CONF })
   commitBodyState(report.state)
   applying.value = false
   applied.value = true
-  uni.showToast({ title: `已更新 ${report.applied.length} 项`, icon: 'none' })
+  const skippedN = report.skipped.length
+  uni.showToast({
+    title: skippedN ? `已更新 ${report.applied.length} 项，${skippedN} 项保留原值` : `已更新 ${report.applied.length} 项`,
+    icon: 'none',
+  })
 }
 
 function goPersona(): void {
@@ -362,6 +472,9 @@ onMounted(() => {
    * 就直接拿它跑**与用户操作完全相同的那条分析链路**。
    * 它不影响任何正常流程，也不会在无注入时产生任何行为。
    */
+  // 挂载就开始后台下载：用户读说明、拍照的这段时间正好用上
+  void preloadAssets()
+
   const injected = (window as unknown as { __CDA_DEMO_IMAGE?: string }).__CDA_DEMO_IMAGE
   if (typeof injected === 'string' && injected) {
     preview.value = injected
@@ -380,6 +493,16 @@ onMounted(() => {
 .pv-t { font-size: 13px; font-weight: 700; color: #2f5d7c; display: block; }
 .pv-s { font-size: 11.5px; color: #4a6f88; line-height: 17px; display: block; margin-top: 4px; }
 
+.preload { margin-top: 10px; background: #fff; border-radius: 11px; padding: 12px 14px; }
+.pl-row { display: flex; justify-content: space-between; align-items: baseline; }
+.pl-t { font-size: 12.5px; font-weight: 600; color: #333; }
+.pl-p { font-size: 12.5px; font-weight: 700; color: #1a1a1a; }
+.pl-bar { height: 4px; background: #eee; border-radius: 2px; overflow: hidden; margin: 8px 0 7px; }
+.pl-in { height: 100%; background: #1a1a1a; border-radius: 2px; transition: width .2s; }
+.pl-s { font-size: 10.5px; color: #9a9a9a; line-height: 15px; display: block; }
+.skipped { margin-top: 12px; background: #fdf6e8; border-radius: 10px; padding: 11px 12px; }
+.sk-t { font-size: 11px; color: #8a6a30; line-height: 16px; display: block; }
+.sk-s { font-size: 11.5px; color: #6a5a40; font-weight: 600; display: block; margin-top: 4px; }
 .scope { margin-top: 12px; background: #fff; border-radius: 11px; padding: 12px 14px; }
 .scope-t { display: block; font-size: 12.5px; font-weight: 600; color: #333; }
 .scope-s { display: block; font-size: 11px; color: #8a8a8a; line-height: 16px; margin-top: 5px; }
@@ -437,7 +560,7 @@ onMounted(() => {
 .summary { display: block; text-align: right; font-size: 11.5px; color: #8a8a8a; margin-top: 10px; }
 
 .apply { margin-top: 18px; height: 48px; border-radius: 12px; background: #1a1a1a; display: flex; align-items: center; justify-content: center; }
-.apply.dis { background: #cfcfcf; }
+.apply.empty { background: #cfcfcf; }
 .apply text { color: #fff; font-size: 15px; font-weight: 600; }
 .apply-note { display: block; font-size: 10.5px; color: #a8a8a8; line-height: 16px; margin-top: 10px; text-align: center; }
 

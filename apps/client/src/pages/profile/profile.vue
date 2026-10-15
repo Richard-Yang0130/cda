@@ -34,8 +34,17 @@
         <text class="arrow">›</text>
       </view>
       <view class="preview">
+        <!--
+          ⚠️ 必须同时显示**肩宽**。
+          原先只显示三围，而「从照片估算比例」按设计**只改比例、不改三围**
+          （单张正面照看不到身体厚度）。于是用户应用完回到这里，
+          看到的数字一模一样，会以为功能没生效 —— 实际反馈里就是这样。
+          显示肩宽后，比例类修改才有可见的反馈。
+        -->
         <text class="ptag">{{
-          store.personaCreated ? `胸${p.chestCm} 腰${p.waistCm} 臀${p.hipCm}` : '创建后可在 3D 人偶上试穿'
+          store.personaCreated
+            ? `肩${p.shoulderWidthCm} 胸${p.chestCm} 腰${p.waistCm} 臀${p.hipCm}`
+            : '创建后可在 3D 人偶上试穿'
         }}</text>
       </view>
     </view>
