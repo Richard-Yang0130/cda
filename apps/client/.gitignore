@@ -1,0 +1,5 @@
+
+
+# MediaPipe 的 WASM 与模型（约 42MB，第三方二进制）
+# 用 node scripts/fetch-vision-assets.mjs 下载，不入库
+src/static/vision/

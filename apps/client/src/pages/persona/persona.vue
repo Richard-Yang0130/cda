@@ -100,6 +100,11 @@
     </view>
 
     <view class="foot">
+      <!-- 照片估算入口：手动调参是最累的一步，给一条更省事的路 -->
+      <view class="from-photo" @click="goPhotoEstimate">
+        <text class="fp-t">📷 从全身照估算比例</text>
+        <text class="fp-s">不用一个个量，照片自动填好身高比例</text>
+      </view>
       <view class="primary" @click="goBack"><text>完成，去看衣橱</text></view>
     </view>
   </view>
@@ -237,6 +242,10 @@ function switchBuild(id: BodyBuildId): void {
   engine?.setBodyProfile(profile.value, 'final')
 }
 
+function goPhotoEstimate(): void {
+  uni.navigateTo({ url: '/pages/photo-proportion/photo-proportion' })
+}
+
 function goBack(): void {
   uni.navigateTo({ url: '/pages/index/index' })
 }
@@ -269,9 +278,24 @@ onMounted(() => {
   Object.assign(state, store.bodyState, { frame: { ...store.bodyState.frame } })
   void initEngine()
 })
-onShow(() => {
-  // 从别的页面回来时同步（例如在试穿页改过身型）
+/*
+ * 从别的页面返回时同步。
+ *
+ * ⚠️ 原先只 Object.assign，**不通知引擎** —— 于是「照片估算」页写入新身型后
+ * 回到这里，数字变了但人偶还是旧样子。必须补上 setBodyProfile；
+ * 性别若被改过还要换网格（男女是两套 OBJ）。
+ */
+onShow(async () => {
+  const prevGender = state.gender
   Object.assign(state, store.bodyState, { frame: { ...store.bodyState.frame } })
+  engine?.setBodyProfile(profile.value, 'final')
+  if (state.gender !== prevGender) {
+    try {
+      await engine?.useMeshBody(`/static/models/${state.gender}.obj`)
+    } catch (err) {
+      hint.value = `网格加载失败：${String(err)}`
+    }
+  }
 })
 onBeforeUnmount(() => {
   engine?.stop()
@@ -435,6 +459,11 @@ onBeforeUnmount(() => {
 .foot {
   padding: 12px 14px 20px;
 }
+.from-photo {
+  background: #eef4f8; border-radius: 12px; padding: 12px 14px; margin-bottom: 10px;
+}
+.fp-t { display: block; font-size: 13.5px; font-weight: 700; color: #2f5d7c; }
+.fp-s { display: block; font-size: 11px; color: #4a6f88; margin-top: 3px; }
 .primary {
   height: 44px;
   border-radius: 12px;

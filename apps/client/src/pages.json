@@ -75,6 +75,12 @@
     }
   },
   {
+    "path": "pages/photo-proportion/photo-proportion",
+    "style": {
+      "navigationBarTitleText": "照片估算比例"
+    }
+  },
+  {
     "path": "pages/profile/edit",
     "style": {
       "navigationBarTitleText": "我的资料"
