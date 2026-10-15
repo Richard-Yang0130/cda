@@ -217,7 +217,11 @@ if (state?.rows.length && clicked) {
   const reg = await fetch(`${BASE}/api/auth/register`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
-      inviteCode: 'POC-01', password: 'pw123456', nickname: '照片用例',
+      // ⚠️ 必须用**运行器提供**的邀请码。写死自己起服务时的码（POC-01），
+      // 通过 node tests/run.mjs 跑就会因为码不存在而注册失败，
+      // 表现为断言以完全无关的原因挂掉。
+      inviteCode: process.env.CDA_INVITE ?? 'CDA-BETA-01',
+      password: 'pw123456', nickname: '照片用例',
       phone: '139' + String(Date.now()).slice(-8), gender: 'female', birthday: '1995-06-15',
     }),
   }).then((r) => r.json()).catch(() => ({}))
