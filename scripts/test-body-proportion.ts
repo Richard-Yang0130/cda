@@ -261,6 +261,27 @@ function synthPose(opts: {
     `原 ${base.frame.calfCm} → 现 ${out.state.frame.calfCm}`)
 }
 
+// ── ⑨b 安全余量：不得把值顶到模型区间的极值（极值附近有既有几何瑕疵）──
+{
+  const base = createBodyState('female', 'average', 158)
+  const s = synthPose({ heightCm: 158, span: 0.95 })
+  const r = estimateBodyProportion({ landmarks: s.lm, personCount: 1, aspect: s.aspect, heightCm: 158, gender: 'female', bounds: s.bounds })
+  // 人为把两项估到上限，验证会被收进内侧
+  const forced = {
+    ...r,
+    frames: r.frames.map((f) =>
+      f.key === 'neckLengthCm' || f.key === 'torsoLengthCm' ? { ...f, clampedCm: FRAME_RANGES[f.key].max, confidence: 0.9 } : f,
+    ),
+  }
+  const out = applyBodyProportionEstimate(base, forced)
+  const neck = out.state.frame.neckLengthCm
+  const torso = out.state.frame.torsoLengthCm
+  const nRange = FRAME_RANGES.neckLengthCm
+  const tRange = FRAME_RANGES.torsoLengthCm
+  ck('★ 颈长不会贴在模型上限（留出安全余量）', neck < nRange.max - 0.01, `${neck} < ${nRange.max}`)
+  ck('★ 躯干长不会贴在模型上限（留出安全余量）', torso < tRange.max - 0.01, `${torso} < ${tRange.max}`)
+}
+
 // ── ⑨ 身高区间：应用时不得越界 ──
 {
   const base = createBodyState('female', 'average', 160)

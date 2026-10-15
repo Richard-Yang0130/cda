@@ -436,6 +436,16 @@ export function hasBlockingIssue(r: ProportionResult): boolean {
 export interface ApplyOptions {
   /** 低于该置信度的字段保留原值。默认 0.5 —— 宁可少改，不可改错 */
   minConfidence?: number
+  /**
+   * 安全余量（0..0.5）：把写入值限制在模型区间的**内侧**，不贴边。
+   *
+   * 为什么需要：网格重拟合在各段参数的极值附近会出现可见的几何瑕疵
+   * （头顶尖刺，详见 body-proportion 的说明与项目记录）。
+   * 那是重拟合算法的既有问题，与本模块无关，但照片估算**很容易**
+   * 把颈长/躯干长直接顶到上限 —— 实测就是这么发生的。
+   * 收进内侧既避开瑕疵，也不损失实际精度（几毫米的差别看不出来）。
+   */
+  safeMargin?: number
 }
 
 export interface ApplyReport {
@@ -460,6 +470,7 @@ export function applyBodyProportionEstimate(
   opts: ApplyOptions = {},
 ): ApplyReport {
   const min = opts.minConfidence ?? 0.5
+  const margin = Math.min(0.5, Math.max(0, opts.safeMargin ?? 0.15))
   let next = setHeight(current, est.heightCm)
   const applied: FrameKey[] = []
   const skipped: FrameKey[] = []
@@ -469,8 +480,17 @@ export function applyBodyProportionEstimate(
       skipped.push(f.key)
       continue
     }
-    // 走 setFrame，由其统一夹紧 —— 不在调用方复制一份 clamp 逻辑
-    next = setFrame(next, f.key, f.clampedCm)
+    /*
+     * 先收进安全区间，再交给 setFrame 统一夹紧。
+     * 用「向区间中点收缩」而不是简单截断：截断会让结果长期贴在边界上，
+     * 收缩则保持值本身的可辨识度，且离边界越近收缩越多。
+     */
+    const range = FRAME_RANGES[f.key]
+    const span = range.max - range.min
+    const lo = range.min + span * margin
+    const hi = range.max - span * margin
+    const v = Math.min(hi, Math.max(lo, f.clampedCm))
+    next = setFrame(next, f.key, v)
     applied.push(f.key)
   }
   return { state: next, applied, skipped }
