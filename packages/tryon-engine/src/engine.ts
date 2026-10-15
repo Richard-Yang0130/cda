@@ -22,7 +22,6 @@ import {
 } from './body'
 import { createGarment, type Garment } from './garment'
 import { MeshBody } from './mesh-body'
-import { RiggedBody } from './rigged-body'
 import type { CanvasLike, RendererLike, TryonPlatform } from './platform'
 
 export interface TryonEngineOptions {
@@ -51,13 +50,7 @@ export class TryonEngine {
    * SDF 模型仍然保留（`this.model`），因为服装壳的射线求交依赖它 ——
    * 两者由同一份身型数据驱动，所以大致对齐。
    */
-  /**
-   * 当前的网格人体。两种实现共用同一套接口（object3D / setProfile /
-   * radiusAt / dispose），所以引擎其余部分不需要知道用的是哪一种：
-   *   MeshBody   —— 旧的静态网格 + 手写柱面重拟合（保留，便于对比与回退）
-   *   RiggedBody —— 新的 MakeHuman 官方骨架 + 官方权重 + 形变目标
-   */
-  private meshBody: MeshBody | RiggedBody | null = null
+  private meshBody: MeshBody | null = null
   /** 脚下假阴影。用程序化纹理而非 shadowMap，移动端更省 */
   private groundShadow: THREE.Mesh | null = null
   /**
@@ -280,11 +273,7 @@ export class TryonEngine {
     // 曾经在函数开头就读进局部变量，而下载 OBJ 要几百毫秒到数秒，
     // 期间用户改的体型全部丢失 —— 表现就是「拖滑杆网格纹丝不动」。
     const gender = this.model.profile.gender
-    // 按资产类型分派：.bin 是烘焙好的骨架资产，其余仍走旧的静态网格。
-    // 这样调用方只换一个 URL，不必关心用的是哪套实现。
-    const mb = url.endsWith('.bin')
-      ? await RiggedBody.loadFromUrl(url, this.model.profile)
-      : await MeshBody.loadFromUrl(url, this.model.profile, gender)
+    const mb = await MeshBody.loadFromUrl(url, this.model.profile, gender)
     const profile = this.model.profile
     if (this.meshBody) {
       this.world.remove(this.meshBody.object3D)
