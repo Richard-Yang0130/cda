@@ -11,7 +11,7 @@ async function api(method, path, { token, body } = {}) {
 const stamp = Date.now().toString().slice(-6)
 async function mkUser(n, i) {
   const r = await api('POST','/api/auth/register',{body:{
-    inviteCode:`CDA-BETA-${String(i).padStart(2,'0')}`, password:'pw123456',
+    inviteCode:`ZZTEST-A${String(i).padStart(2,'0')}`, password:'pw123456',
     nickname:n, phone:'139'+String(Date.now()+i).slice(-8), gender:'female', birthday:'1995-06-15',
   }})
   return r.data
@@ -47,7 +47,7 @@ const s3 = await api('GET',`/api/users?q=场景丙`,{token:A.token})
 ck('★ 关闭后又能搜到（可逆）', (s3.data.users??[]).some(u=>u.code===C.user.code))
 
 // ── 场景 3：邀请码一次性 + 并发注册 ──
-const code = 'CDA-BETA-10'
+const code = 'ZZTEST-A10'
 const [r1, r2] = await Promise.all([
   api('POST','/api/auth/register',{body:{inviteCode:code,password:'pw123456',nickname:'并发一',phone:'137'+stamp+'1',gender:'male',birthday:'1995-01-01'}}),
   api('POST','/api/auth/register',{body:{inviteCode:code,password:'pw123456',nickname:'并发二',phone:'137'+stamp+'2',gender:'male',birthday:'1995-01-01'}}),

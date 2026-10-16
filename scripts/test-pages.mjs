@@ -27,7 +27,7 @@ const API = process.env.CDA_API ?? 'http://127.0.0.1:8899'
 try {
   const reg = await fetch(API + '/api/auth/register', {
     method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ inviteCode: 'CDA-BETA-02', password: 'pw123456', nickname: '页面测试',
+    body: JSON.stringify({ inviteCode: 'ZZTEST-A02', password: 'pw123456', nickname: '页面测试',
       phone: '134' + String(Date.now()).slice(-8), gender: 'female', birthday: '1995-06-15' }),
   }).then((r) => r.json())
   const post = await fetch(API + '/api/posts', {

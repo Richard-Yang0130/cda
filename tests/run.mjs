@@ -62,6 +62,14 @@ function prepareScript(file) {
 const PORT = Number(process.env.CDA_PORT ?? 8899)
 const BASE = `http://127.0.0.1:${PORT}`
 const ADMIN_USER = 'admin'
+/*
+ * ⚠️ 测试邀请码一律用 ZZTEST-* 前缀，**绝不要用线上那批码的格式**。
+ *
+ * 起因：这些码原本直接复用了**线上那批码**（同一套前缀与编号）。
+ * 后果是——只要仓库公开，任何人拿测试脚本里的码就能直接注册线上账号
+ * （当时线上 12 个码里有 11 个未使用）。测试与生产的凭据必须物理隔离，
+ * 不能靠"没人会去看测试文件"。
+ */
 const ADMIN_PASS = 'AdminTest123456'
 
 const argv = process.argv.slice(2)
@@ -128,7 +136,7 @@ async function waitHealth(ms = 30000) {
  *
  * ⚠️ **每个用例文件跑之前都要调一次。**
  * 起初是整套起一次服务，结果「单跑全过、全跑全挂」——
- * 因为邀请码是一次性的，第一个用例用掉 CDA-BETA-01 后，
+ * 因为邀请码是一次性的，第一个用例用掉 ZZTEST-A01 后，
  * 后面的用例全部注册失败。这不是代码问题，是测试互相污染。
  * 隔离的代价是每个文件多约 2 秒启动时间，完全值得。
  */
@@ -160,9 +168,9 @@ async function restartServer() {
        * 实际只是测试数据没对齐。
        */
       CDA_INVITES: [
-        ...Array.from({ length: 32 }, (_, i) => `CDA-BETA-${String(i + 1).padStart(2, '0')}`),
-        ...Array.from({ length: 8 }, (_, i) => `BETA-00${i + 1}`),
-        ...Array.from({ length: 8 }, (_, i) => `E2E-00${i + 1}`),
+        ...Array.from({ length: 32 }, (_, i) => `ZZTEST-A${String(i + 1).padStart(2, '0')}`),
+        ...Array.from({ length: 8 }, (_, i) => `ZZTEST-B${i + 1}`),
+        ...Array.from({ length: 8 }, (_, i) => `ZZTEST-C${i + 1}`),
       ].join(','),
     },
     stdio: ['ignore', 'pipe', 'pipe'],

@@ -19,7 +19,7 @@ sleep 1
 rm -rf apps/server/data && mkdir -p apps/server/data
 cd apps/server
 CDA_PORT="$PORT" CDA_DB=./data/e2e.db CDA_WEB=../client/dist/build/h5 \
-  CDA_INVITES="E2E-001,E2E-002,E2E-003,E2E-004,E2E-005" \
+  CDA_INVITES="ZZTEST-C1,ZZTEST-C2,ZZTEST-C3,ZZTEST-C4,ZZTEST-C5" \
   node --experimental-strip-types src/index.ts > /tmp/cda-e2e.log 2>&1 &
 SRV=$!
 cd ../..

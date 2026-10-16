@@ -19,7 +19,7 @@ const T = login.data.token
 ck('返回权限清单（供前端显隐按钮）', Array.isArray(login.data.admin?.perms) && login.data.admin.perms.includes('admin.manage'), `${login.data.admin?.perms?.length} 项`)
 
 // ── 隔离性：用户 token 换不到后台权限 ──
-const userReg = await api('POST','/api/auth/register',{body:{inviteCode:'CDA-BETA-01',password:'pw123456',nickname:'权限测试用户',phone:'138'+Date.now().toString().slice(-8),gender:'female',birthday:'1995-06-15'}})
+const userReg = await api('POST','/api/auth/register',{body:{inviteCode:'ZZTEST-A01',password:'pw123456',nickname:'权限测试用户',phone:'138'+Date.now().toString().slice(-8),gender:'female',birthday:'1995-06-15'}})
 const userToken = userReg.data.token
 const cross = await api('GET','/api/admin/users',{token:userToken})
 ck('★ 用户 token 访问后台接口被拒（两套体系隔离）', cross.status === 401)

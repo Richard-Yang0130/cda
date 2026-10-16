@@ -112,7 +112,7 @@ ck('第 5 步通过 → 第 6 步', (await stepNow()) === 6)
 // 这个用例当时没跟着改，所以一直失败 —— 是测试没跟上功能，不是功能坏了。
 const inputs6 = await p.$$('uni-input input')
 if (inputs6[0]) { await inputs6[0].focus(); await p.keyboard.type('pw123456', { delay: 25 }) }
-if (inputs6[1]) { await inputs6[1].focus(); await p.keyboard.type('CDA-BETA-01', { delay: 25 }) }
+if (inputs6[1]) { await inputs6[1].focus(); await p.keyboard.type('ZZTEST-A01', { delay: 25 }) }
 await new Promise(r=>setTimeout(r,600))
 ck('第 6 步填入了密码与邀请码', inputs6.length >= 2, `找到 ${inputs6.length} 个输入框`)
 await tap('完成注册')

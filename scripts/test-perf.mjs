@@ -14,7 +14,7 @@ async function timed(fn) { const t=Date.now(); const r=await fn(); return { ms: 
 const tokens = []
 for (let i = 1; i <= 5; i++) {
   const r = await api('POST','/api/auth/register',{body:{
-    inviteCode:`CDA-BETA-${String(i).padStart(2,'0')}`, password:'pw123456',
+    inviteCode:`ZZTEST-A${String(i).padStart(2,'0')}`, password:'pw123456',
     nickname:`性能${i}`, phone:'138'+String(Date.now()+i).slice(-8), gender:'female', birthday:'1995-06-15',
   }})
   if (r.data.token) tokens.push(r.data.token)

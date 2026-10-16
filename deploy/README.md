@@ -28,7 +28,7 @@ sudo systemctl start cda-backup.service && sudo tail -3 /opt/cda/backup.log
 systemctl list-timers cda-backup.timer
 
 # 取回备份到本地
-scp ubuntu@43.128.12.39:/opt/cda/backups/cda-*.db ./
+scp ubuntu@<SERVER_IP>:/opt/cda/backups/cda-*.db ./
 ```
 
 > ⚠️ 备份文件在**同一台服务器**上。服务器整机故障（如磁盘损坏）时备份也一起没了。

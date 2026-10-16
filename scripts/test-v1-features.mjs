@@ -44,7 +44,7 @@ const tap = async (p, l) => {
 
 // 造数据：两个用户 + 一条会话（后端架构下会话不会凭空出现）
 const mkUser = (n, i) => api('POST', '/api/auth/register', {
-  body: { inviteCode: `CDA-BETA-0${i}`, password: 'pw123456', nickname: n,
+  body: { inviteCode: `ZZTEST-A0${i}`, password: 'pw123456', nickname: n,
           phone: '136' + String(Date.now() + i).slice(-8), gender: 'female', birthday: '1995-06-15' },
 })
 const A = (await mkUser('聊天甲', 1)).data

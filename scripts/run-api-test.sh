@@ -19,7 +19,7 @@ sleep 1
 rm -f apps/server/data/test.db*
 cd apps/server
 CDA_PORT="$PORT" CDA_DB=./data/test.db \
-  CDA_INVITES="BETA-001,BETA-002,BETA-003,BETA-004" \
+  CDA_INVITES="ZZTEST-B1,ZZTEST-B2,ZZTEST-B3,ZZTEST-B4" \
   node --experimental-strip-types src/index.ts > /tmp/cda-api-test.log 2>&1 &
 SRV=$!
 cd ../..

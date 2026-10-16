@@ -20,7 +20,7 @@ const badInvite = await api('POST','/api/auth/register',{body:{inviteCode:'WRONG
 ck('无效邀请码被拒绝', badInvite.status === 403, badInvite.data.error)
 
 const a = await api('POST','/api/auth/register',{body:{
-  inviteCode:'BETA-001', password:'pw123456', nickname:'阿林', phone:phoneA,
+  inviteCode:'ZZTEST-B1', password:'pw123456', nickname:'阿林', phone:phoneA,
   gender:'female', birthday:'1995-06-15', styles:['s_minimal'], brands:['b_cos','b_uniqlo'],
   privacy:{hideFromSearch:false,hideOnlineStatus:false,hideRegion:false,allowStrangerMessage:true},
 }})
@@ -30,11 +30,11 @@ const tokenA = a.data.token, codeA = a.data.user?.code
 const badPhone = await api('POST','/api/auth/register',{body:{password:'pw123456',nickname:'格式测试',phone:'12345'}})
 ck('注册时非法手机号被拒绝', badPhone.status === 400, badPhone.data.error)
 
-const reuse = await api('POST','/api/auth/register',{body:{inviteCode:'BETA-001',password:'pw123456',nickname:'重复邀请码测试',phone:'13900000009'}})
+const reuse = await api('POST','/api/auth/register',{body:{inviteCode:'ZZTEST-B1',password:'pw123456',nickname:'重复邀请码测试',phone:'13900000009'}})
 ck('已用过的邀请码不能再用', reuse.status === 403, reuse.data.error)
 
 const b = await api('POST','/api/auth/register',{body:{
-  inviteCode:'BETA-002', password:'pw123456', nickname:'阿泽', phone:phoneB,
+  inviteCode:'ZZTEST-B2', password:'pw123456', nickname:'阿泽', phone:phoneB,
   gender:'male', styles:['s_sport'], brands:['b_nike'],
 }})
 ck('用户B 注册成功', b.data.ok === true, b.data.user?.code)

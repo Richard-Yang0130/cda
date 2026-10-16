@@ -68,7 +68,7 @@ await p1.close()
 const reg = await p1.evaluate ? null : null
 const res = await fetch(`${BASE}/api/auth/register`, {
   method:'POST', headers:{'content-type':'application/json'},
-  body: JSON.stringify({ inviteCode:'E2E-005', password:'pw123456', nickname:nick,
+  body: JSON.stringify({ inviteCode:'ZZTEST-C5', password:'pw123456', nickname:nick,
     phone, gender:'female', birthday:'1995-06-15', styles:['s_minimal'], brands:[] }),
 })
 const regData = await res.json()
@@ -79,7 +79,7 @@ const codeNew = regData.user?.code
 // （搜索接口会排除自己，用同一个人的 token 搜自己是永远搜不到的 —— 上一版就错在这里）
 const reg2 = await (await fetch(`${BASE}/api/auth/register`, {
   method:'POST', headers:{'content-type':'application/json'},
-  body: JSON.stringify({ inviteCode:'E2E-004', password:'pw123456', nickname:'旁观者乙',
+  body: JSON.stringify({ inviteCode:'ZZTEST-C4', password:'pw123456', nickname:'旁观者乙',
     phone:'137'+Date.now().toString().slice(-8), gender:'male', birthday:'1994-01-01' }),
 })).json()
 ck('第二个用户注册成功', reg2.ok === true, reg2.user?.code)

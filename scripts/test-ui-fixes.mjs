@@ -29,7 +29,7 @@ const API = process.env.CDA_API ?? BASE
 async function seedConversation() {
   const reg = (n, i) => fetch(API + '/api/auth/register', {
     method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ inviteCode: `CDA-BETA-0${i}`, password: 'pw123456', nickname: n,
+    body: JSON.stringify({ inviteCode: `ZZTEST-A0${i}`, password: 'pw123456', nickname: n,
       phone: '135' + String(Date.now() + i).slice(-8), gender: 'female', birthday: '1995-06-15' }),
   }).then((r) => r.json())
   const a = await reg('界面甲', 1)

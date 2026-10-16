@@ -14,7 +14,7 @@ async function api(method, path, { token, body } = {}) {
 const stamp = Date.now().toString().slice(-6)
 async function mkUser(n, i) {
   const r = await api('POST','/api/auth/register',{body:{
-    inviteCode:`CDA-BETA-0${i}`, password:'pw123456', nickname:n,
+    inviteCode:`ZZTEST-A0${i}`, password:'pw123456', nickname:n,
     phone:'132'+String(Date.now()+i).slice(-8), gender:'female', birthday:'1995-06-15',
   }})
   return r.data
@@ -36,7 +36,7 @@ ck('★ 三围也为 0（未伪造）', A.user?.body?.chestCm === 0 && A.user?.b
 // ⚠️ 上面 mkUser 为了别的用例带了生日，所以这里**另造一个真正最小化的注册** ——
 // 「跳过」的意思是什么都不传，用一个带了值的用户去断言会得到假结果。
 const MIN = await api('POST','/api/auth/register',{body:{
-  inviteCode:'CDA-BETA-08', password:'pw123456', nickname:'最小注册',
+  inviteCode:'ZZTEST-A08', password:'pw123456', nickname:'最小注册',
   phone:'131'+String(Date.now()).slice(-8),
 }})
 ck('★ 只传昵称/手机号/密码也能注册（真正的跳过）', MIN.data.ok === true, MIN.data.user?.code)
