@@ -232,6 +232,7 @@ export class Garment {
   }
 
   setColor(hex: number): void {
+    this.spec.color = hex
     for (const m of this.meshes) {
       ;(m.material as THREE.MeshStandardMaterial).color.setHex(hex)
     }
@@ -422,14 +423,20 @@ export class Garment {
         const d = -0.014 + (len + 0.014) * k
         const center = limbPointAt(arm, d)
         const fallback = limbRadiusAt(arm, Math.max(0, d))
+        const from = d <= arm.segLen1 ? arm.origin : arm.mid
+        const to = d <= arm.segLen1 ? arm.mid : arm.end
+        const tangent = new THREE.Vector3(to.x - from.x, to.y - from.y, to.z - from.z).normalize()
+        const u = new THREE.Vector3(0, 0, 1).cross(tangent).normalize()
+        const v = tangent.clone().cross(u).normalize()
 
         for (let c = 0; c <= segs; c++) {
           const theta = (c / segs) * Math.PI * 2
-          const dirX = Math.cos(theta)
-          const dirZ = Math.sin(theta)
-          const hit = this.surface.radiusAt(center.x, center.y, center.z, dirX, 0, dirZ, fallback * 2.2)
+          // A-pose sleeves need sections perpendicular to the arm. Horizontal
+          // rings flatten the sleeve and cut through the upper arm near the shoulder.
+          const direction = u.clone().multiplyScalar(Math.cos(theta)).addScaledVector(v, Math.sin(theta))
+          const hit = this.surface.radiusAt(center.x, center.y, center.z, direction.x, direction.y, direction.z, fallback * 2.2)
           const radius = (hit ?? fallback) + off
-          positions.push(center.x + dirX * radius, center.y, center.z + dirZ * radius)
+          positions.push(center.x + direction.x * radius, center.y + direction.y * radius, center.z + direction.z * radius)
           uvs.push(c / segs, k)
           params.push({ t: center.y / H, theta })
         }

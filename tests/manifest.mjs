@@ -33,6 +33,16 @@ export const LEVELS = {
  * impacts     **影响点标签** —— 改了这些地方就该跑它
  */
 export const TESTS = [
+  {
+    file: 'scripts/test-mesh-body.ts', level: 'L1', module: '3D 网格回归', runner: 'none',
+    covers: ['真实 OBJ 身高/落地/头部保护', '体表查询与 Three.js 对照', '加载竞态与释放', '服装随体型更新并保留状态', '缩放不重置'],
+    impacts: ['body', 'tryon', 'mesh'],
+  },
+  {
+    file: 'scripts/audit-body.ts', level: 'L3', module: '3D 网格回归', runner: 'none',
+    covers: ['男女 68 组参数边界', '相邻边拉伸离群检测，异常时退出失败'],
+    impacts: ['body', 'tryon', 'mesh'],
+  },
   // ── L0 基础功能 ──
   {
     file: 'scripts/test-pages.mjs',
