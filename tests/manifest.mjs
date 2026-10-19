@@ -34,6 +34,11 @@ export const LEVELS = {
  */
 export const TESTS = [
   {
+    file: 'scripts/test-garment-seams.ts', level: 'L1', module: '服装接缝回归', runner: 'none',
+    covers: ['衣身与袖子连通', '肩缝/腋下流形与法线方向', '领口/袖口/衣摆边界', '裤装裆缝与裤长', '围巾环带闭合', '男女体型边界', '敞开/披着/扣子切换无接缝漂移', 'SDF 回退'],
+    impacts: ['body', 'tryon', 'mesh', 'garment'],
+  },
+  {
     file: 'scripts/test-mesh-body.ts', level: 'L1', module: '3D 网格回归', runner: 'none',
     covers: ['真实 OBJ 身高/落地/头部保护', '体表查询与 Three.js 对照', '加载竞态与释放', '服装随体型更新并保留状态', '缩放不重置'],
     impacts: ['body', 'tryon', 'mesh'],
