@@ -132,6 +132,16 @@ export const api = {
     request<{ token: string; user: any }>('/auth/register', { method: 'POST', body: b, anonymous: true }),
   login: (account: string, password: string) =>
     request<{ token: string; user: any }>('/auth/login', { method: 'POST', body: { account, password }, anonymous: true }),
+  /**
+   * 注册前置检查：这个手机号 / 邮箱是否已被占用。
+   *
+   * 在「获取验证码」时调用，而不是等到第 6 步提交才报 409 ——
+   * 否则用户要把性别、生日、身型、风格、品牌全填一遍才被告知白填。
+   */
+  checkAccount: (account: string, kind: 'phone' | 'email') =>
+    request<{ available: boolean }>('/auth/check-account', {
+      method: 'POST', body: { account, kind }, anonymous: true,
+    }),
   logout: () => request('/auth/logout', { method: 'POST' }),
 
   // 我

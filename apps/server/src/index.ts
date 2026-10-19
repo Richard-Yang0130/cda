@@ -224,6 +224,56 @@ function seedInvites(): void {
 
 // ── 路由：认证 ────────────────────────────────────────
 
+/*
+ * 前置可用性检查：这个手机号 / 邮箱是否已经被注册。
+ *
+ * ── 为什么单独开一个接口 ──
+ * 原来重复注册要等到**第 6 步提交**才由 /auth/register 返回 409，
+ * 此时用户已经把性别、生日、身型、风格、品牌全填了一遍。
+ * 在「获取验证码」那一刻就告诉他，能直接省掉这一整轮无用功。
+ *
+ * ── 为什么必须限流 ──
+ * 这个接口天然可用于**枚举**：攻击者能批量探测哪些手机号注册过。
+ * 所以按来源 IP 限流，并且**只回答「可用 / 已占用」**，
+ * 绝不回传昵称、用户码等任何可用于撞库的信息。
+ */
+const CHECK_WINDOW_MS = 10 * 60 * 1000
+const CHECK_MAX_PER_WINDOW = 20
+const checkHits = new Map<string, number[]>()
+function withinCheckLimit(ip: string): boolean {
+  const now = Date.now()
+  const arr = (checkHits.get(ip) ?? []).filter((t) => now - t < CHECK_WINDOW_MS)
+  arr.push(now)
+  checkHits.set(ip, arr)
+  // 简单的兜底清理，避免长期运行后 Map 无限增长
+  if (checkHits.size > 4096) {
+    for (const [k, v] of checkHits) {
+      if (!v.length || now - v[v.length - 1]! > CHECK_WINDOW_MS) checkHits.delete(k)
+    }
+  }
+  return arr.length <= CHECK_MAX_PER_WINDOW
+}
+
+route('POST', '/api/auth/check-account', false, (req, res) => {
+  if (!withinCheckLimit(String(req.socket.remoteAddress ?? 'unknown'))) {
+    return fail(res, 429, '查询过于频繁，请稍后再试')
+  }
+  const b = req.body ?? {}
+  const account = String(b.account ?? '').trim()
+  const kind = String(b.kind ?? '')
+  if (kind !== 'phone' && kind !== 'email') return fail(res, 400, '账号类型不正确')
+  if (!account) return fail(res, 400, '请先填写手机号或邮箱')
+  if (account.length > 120) return fail(res, 400, '账号过长')
+  // 格式校验与 /auth/register 保持一致，避免两处规则漂移
+  if (kind === 'phone' && !/^1[3-9]\d{9}$/.test(account)) return fail(res, 400, '手机号格式不正确')
+  if (kind === 'email' && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(account)) return fail(res, 400, '邮箱格式不正确')
+
+  // 与 /auth/register 的判重口径**完全一致**（不过滤 status）：
+  // 否则会出现「检查说可用、提交却被拒」的矛盾
+  const row = db.prepare(`SELECT code FROM users WHERE ${kind} = ?`).get(account) as any
+  json(res, 200, { ok: true, available: !row })
+})
+
 route('POST', '/api/auth/register', false, (req, res) => {
   const b = req.body
   const needed = ['password', 'nickname']

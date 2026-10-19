@@ -132,6 +132,34 @@ export const TESTS = [
     impacts: ['photo', 'page', 'frontend', 'perf'],
   },
 
+  {
+    file: 'scripts/test-account-check.mjs',
+    level: 'L2',
+    module: '注册前置检查',
+    runner: 'api',
+    covers: [
+      '已注册的手机号 / 邮箱 → available=false',
+      '未注册的手机号 / 邮箱 → available=true（不能误拦新用户）',
+      '响应只含 ok/available，不泄露昵称或用户码（防枚举升级为隐私泄露）',
+      '手机号 / 邮箱格式非法、kind 非法、缺参、超长 → 400',
+      '连续查询超过阈值 → 429（防批量枚举）',
+    ],
+    impacts: ['api', 'auth', 'register', 'security', 'frontend'],
+  },
+
+  {
+    file: 'scripts/test-register-duplicate.mjs',
+    level: 'L1',
+    module: '注册前置检查-UI',
+    runner: 'browser',
+    covers: [
+      '已注册手机号点「获取验证码」→ 当场提示，且不进入验证码步骤',
+      '未注册手机号 → 正常进入验证码步骤（不误拦新用户）',
+      '全程无运行时报错',
+    ],
+    impacts: ['register', 'frontend', 'page', 'auth'],
+  },
+
   // ── L2 安全设计 ──
   {
     file: 'scripts/test-server-regressions.mjs',

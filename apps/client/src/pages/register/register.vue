@@ -25,23 +25,25 @@
           <text class="warn">演示环境：不会真的发送验证码或跳转授权</text>
         </template>
 
-        <!-- 1b 手机号（仅手机号方式） -->
-        <template v-else-if="draft.loginMethod === 'phone' && !codeSent">
+        <!-- 1b 手机号 / 邮箱（两者都要验证码，共用同一块输入） -->
+        <template v-else-if="needsCode && !codeSent">
           <view class="backline" @click="resetMethod"><text>‹ 换一种方式</text></view>
-          <text class="lab">手机号</text>
+          <text class="lab">{{ accountKind === 'email' ? '邮箱' : '手机号' }}</text>
           <view class="prow">
-            <text class="pcc">+86</text>
+            <text v-if="accountKind === 'phone'" class="pcc">+86</text>
             <input
               v-model="phone"
               class="pinput"
-              type="number"
-              :maxlength="11"
-              placeholder="请输入 11 位手机号"
+              :type="accountKind === 'email' ? 'text' : 'number'"
+              :maxlength="accountKind === 'email' ? 60 : 11"
+              :placeholder="accountKind === 'email' ? '请输入邮箱地址' : '请输入 11 位手机号'"
               placeholder-class="ph"
             />
           </view>
-          <text v-if="phone && !phoneValid" class="err">手机号格式不正确（需 1 开头的 11 位数字）</text>
-          <view class="sendbtn" :class="{ dis: !phoneValid }" @click="sendCode">
+          <text v-if="phone && !accountValid" class="err">
+            {{ accountKind === 'email' ? '邮箱格式不正确' : '手机号格式不正确（需 1 开头的 11 位数字）' }}
+          </text>
+          <view class="sendbtn" :class="{ dis: !accountValid }" @click="sendCode">
             <text>获取验证码</text>
           </view>
         </template>
@@ -49,7 +51,7 @@
         <!-- 1c 验证码：6 个格子、大号加粗 -->
         <template v-else>
           <view class="backline" @click="codeSent = false"><text>‹ 修改手机号</text></view>
-          <text class="lab">验证码已发送至 +86 {{ phone }}</text>
+          <text class="lab">验证码已发送至 {{ accountKind === 'email' ? phone : '+86 ' + phone }}</text>
           <!--
             验证码输入：**真实输入框透明覆盖在 6 个格子上**。
             ⚠️ 曾经把输入框放在 left:-9999px 的屏幕外，且格子没有点击聚焦，
@@ -365,15 +367,26 @@ const codeFocus = ref(false)
 
 /** 中国大陆手机号：1 开头，第二位 3–9，共 11 位 */
 const PHONE_RE = /^1[3-9]\d{9}$/
+const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
 const phoneValid = computed(() => PHONE_RE.test(phone.value))
+/** 当前方式下填的是手机号还是邮箱。两者共用 phone 这个输入值 */
+const accountKind = computed<'phone' | 'email'>(() =>
+  draft.loginMethod === 'email' ? 'email' : 'phone')
+const emailValid = computed(() => EMAIL_RE.test(phone.value))
+/** 与当前方式对应的格式校验 */
+const accountValid = computed(() =>
+  accountKind.value === 'email' ? emailValid.value : phoneValid.value)
+/** 需要验证码的方式（微信/QQ 在演示环境里是占位，不发放验证码） */
+const needsCode = computed(() =>
+  draft.loginMethod === 'phone' || draft.loginMethod === 'email')
 const codeValid = computed(
   () => codeInput.value.length === 6 && codeInput.value === sentCode.value,
 )
 
 function pickMethod(id: LoginMethod): void {
   draft.loginMethod = id
-  // 非手机号方式没有验证码环节，直接进入下一步
-  if (id !== 'phone') codeSent.value = true
+  // 手机号与邮箱都要验证码；微信 / QQ 在演示环境是占位，直接进下一步
+  if (id !== 'phone' && id !== 'email') codeSent.value = true
 }
 
 function resetMethod(): void {
@@ -383,10 +396,43 @@ function resetMethod(): void {
   codeInput.value = ''
 }
 
-function sendCode(): void {
-  if (!phoneValid.value) {
-    uni.showToast({ title: '请输入正确的 11 位手机号', icon: 'none' })
+async function sendCode(): Promise<void> {
+  if (!accountValid.value) {
+    uni.showToast({
+      title: accountKind.value === 'email' ? '请输入正确的邮箱地址' : '请输入正确的 11 位手机号',
+      icon: 'none',
+    })
     return
+  }
+  /*
+   * ⚠️ 先查这个账号是否已被注册，再「发送验证码」。
+   *
+   * 原来重复注册要等到第 6 步提交才被服务端 409 拒掉，
+   * 用户已经把性别、生日、身型、风格、品牌全填了一遍 —— 纯白填。
+   * 在这里拦下来，用户最多只输了一个手机号。
+   *
+   * 网络失败不阻塞后续流程：宁可让他继续填、最后在提交时再拦，
+   * 也不要因为一次查询超时把人挡在门外。
+   */
+  const kind = accountKind.value
+  try {
+    const r = await api.checkAccount(phone.value, kind)
+    if (r && r.available === false) {
+      uni.showModal({
+        title: '这个账号已经注册过了',
+        content: `${kind === 'email' ? '邮箱' : '手机号'} ${phone.value} 已注册。\n请直接登录，或换一个${
+          kind === 'email' ? '邮箱' : '手机号'
+        }。`,
+        confirmText: '去登录',
+        cancelText: '换一个',
+        success: (m) => {
+          if (m.confirm) uni.navigateTo({ url: '/pages/login/login' })
+        },
+      })
+      return
+    }
+  } catch {
+    /* 查询失败不阻塞，交给提交时的服务端校验兜底 */
   }
   sentCode.value = String(Math.floor(100000 + Math.random() * 900000))
   codeSent.value = true
@@ -461,7 +507,7 @@ const gate = computed(() => {
     return { ok: false, reason: '三围填写有误，请检查' }
   }
   // 第 1 步的额外校验：手机号方式必须通过验证码
-  if (step.value === 1 && draft.loginMethod === 'phone' && !codeValid.value) {
+  if (step.value === 1 && needsCode.value && !codeValid.value) {
     return { ok: false, reason: codeSent.value ? '请输入 6 位验证码' : '请先获取验证码' }
   }
   return base
